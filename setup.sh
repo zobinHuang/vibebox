@@ -21,7 +21,8 @@ install_pkg() {
 }
 
 # ──────────────────────────────────────────────────────────────────────
-COMMIT_HASH="$(curl -fsSL https://api.github.com/repos/zobinHuang/vibebox/commits/main 2>/dev/null | grep -m1 '"sha"' | cut -d'"' -f4 | cut -c1-7 || echo "unknown")"
+COMMIT_HASH="$(curl -fsSL https://api.github.com/repos/zobinHuang/vibebox/commits/main 2>/dev/null | grep -m1 '"sha"' | cut -d'"' -f4 | cut -c1-7)" || true
+COMMIT_HASH="${COMMIT_HASH:-unknown}"
 
 echo ""
 echo "══════════════════════════════════════════════════"
