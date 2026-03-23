@@ -127,7 +127,8 @@ OSC52_BIN="$HOME/.local/bin/osc52-copy"
 printf '%s\n' '#!/usr/bin/env bash' \
   'data=$(base64 | tr -d '\''\n'\'')' \
   'if [ -n "${TMUX:-}" ]; then' \
-  '  printf '\''\033Ptmux;\033\033]52;c;%s\a\033\\'\'' "$data" > /dev/tty' \
+  '  TMUX_PANE_TTY=$(tmux display-message -p "#{pane_tty}")' \
+  '  printf '\''\033]52;c;%s\a'\'' "$data" > "$TMUX_PANE_TTY"' \
   'else' \
   '  printf '\''\033]52;c;%s\a'\'' "$data" > /dev/tty' \
   'fi' > "$OSC52_BIN"
