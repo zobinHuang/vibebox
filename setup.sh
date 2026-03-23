@@ -27,122 +27,111 @@ install_pkg() {
   fi
 }
 
-# ─── 1. prerequisites ────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────
 echo ""
 echo "══════════════════════════════════════════════════"
 echo "  Terminal Vibe-Coding Setup"
 echo "══════════════════════════════════════════════════"
+
+# ─── 1. zellij ────────────────────────────────────────────────────────
 echo ""
+echo "── Zellij ───────────────────────────────────────"
 
-DEPS=(git curl ripgrep fd lazygit)
-# map tool names to the binary names used for checking
-declare -A BIN_MAP=(
-  [git]=git
-  [curl]=curl
-  [ripgrep]=rg
-  [fd]=fd
-  [lazygit]=lazygit
-)
+if command -v zellij &>/dev/null; then
+  info "Zellij already installed ($(zellij --version))"
+else
+  warn "Installing Zellij …"
+  install_pkg zellij
+  info "Zellij installed"
+fi
 
-for dep in "${DEPS[@]}"; do
-  bin="${BIN_MAP[$dep]}"
-  if command -v "$bin" &>/dev/null; then
-    info "$dep already installed"
+# ─── 2. yazi ─────────────────────────────────────────────────────────
+echo ""
+echo "── Yazi ─────────────────────────────────────────"
+
+if command -v yazi &>/dev/null; then
+  info "Yazi already installed ($(yazi --version))"
+else
+  warn "Installing Yazi …"
+  install_pkg yazi
+  info "Yazi installed"
+fi
+
+# Nerd Font (required for yazi icons)
+if command -v brew &>/dev/null; then
+  if brew list --cask font-symbols-only-nerd-font &>/dev/null 2>&1; then
+    info "Nerd Font already installed"
   else
-    warn "Installing $dep …"
-    install_pkg "$dep"
+    warn "Installing Nerd Font …"
+    brew install --cask font-symbols-only-nerd-font
+    info "Nerd Font installed"
   fi
-done
-
-# ─── 2. neovim ────────────────────────────────────────────────────────
-echo ""
-echo "── Neovim ─────────────────────────────────────────"
-
-if command -v nvim &>/dev/null; then
-  info "Neovim already installed ($(nvim --version | head -1))"
-else
-  warn "Installing Neovim …"
-  install_pkg neovim
-fi
-
-# ─── 3. lazyvim ───────────────────────────────────────────────────────
-echo ""
-echo "── LazyVim ────────────────────────────────────────"
-
-NVIM_CONFIG="$HOME/.config/nvim"
-
-if [ -d "$NVIM_CONFIG" ] && [ -f "$NVIM_CONFIG/lua/config/lazy.lua" ]; then
-  info "LazyVim already installed at $NVIM_CONFIG"
-else
-  warn "Installing LazyVim …"
-
-  # backup existing config if present
-  if [ -d "$NVIM_CONFIG" ]; then
-    BACKUP="$NVIM_CONFIG.bak.$(date +%s)"
-    warn "Backing up existing config to $BACKUP"
-    mv "$NVIM_CONFIG" "$BACKUP"
+elif command -v pacman &>/dev/null; then
+  if pacman -Q ttf-nerd-fonts-symbols &>/dev/null 2>&1; then
+    info "Nerd Font already installed"
+  else
+    warn "Installing Nerd Font …"
+    sudo pacman -S --noconfirm ttf-nerd-fonts-symbols
+    info "Nerd Font installed"
   fi
-
-  # backup related data dirs
-  for d in "$HOME/.local/share/nvim" "$HOME/.local/state/nvim" "$HOME/.cache/nvim"; do
-    if [ -d "$d" ]; then
-      mv "$d" "${d}.bak.$(date +%s)"
-    fi
-  done
-
-  git clone https://github.com/LazyVim/starter "$NVIM_CONFIG"
-  # remove starter .git so user can track their own config
-  rm -rf "$NVIM_CONFIG/.git"
-  info "LazyVim installed"
-fi
-
-# ─── 4. patch lazyvim config ─────────────────────────────────────────
-echo ""
-echo "── Patching LazyVim config ──────────────────────"
-
-# --- options.lua ---
-OPTIONS_FILE="$NVIM_CONFIG/lua/config/options.lua"
-OPTIONS_MARKER="-- [a-terminal] patched"
-
-if grep -qF "$OPTIONS_MARKER" "$OPTIONS_FILE" 2>/dev/null; then
-  info "options.lua already patched"
 else
-  cat >> "$OPTIONS_FILE" <<'LUA'
-
--- [a-terminal] patched
--- disable neovim 0.11+ terminal capability query to prevent iterm2 text leakage.
-require("vim.termcap").query = function() end
-
--- map single esc key to exit terminal mode immediately.
-vim.keymap.set('t', '<Esc>', '<C-\\><C-n>', { desc = 'Exit terminal mode' })
-LUA
-  info "Patched options.lua"
+  warn "Please install a Nerd Font manually: https://www.nerdfonts.com/"
 fi
 
-# --- plugins/custom.lua ---
-CUSTOM_PLUGIN="$NVIM_CONFIG/lua/plugins/custom.lua"
+# ─── patch yazi config ────────────────────────────────────────────────
+YAZI_DIR="$HOME/.config/yazi"
+YAZI_CONFIG="$YAZI_DIR/yazi.toml"
+YAZI_KEYMAP="$YAZI_DIR/keymap.toml"
+YAZI_MARKER="# [a-terminal] patched"
 
-if [ -f "$CUSTOM_PLUGIN" ] && grep -qF "width = 30" "$CUSTOM_PLUGIN" 2>/dev/null; then
-  info "custom.lua already patched"
+mkdir -p "$YAZI_DIR"
+
+if [ -f "$YAZI_CONFIG" ] && grep -qF "$YAZI_MARKER" "$YAZI_CONFIG" 2>/dev/null; then
+  info "yazi.toml already patched"
 else
-  mkdir -p "$(dirname "$CUSTOM_PLUGIN")"
-  cat > "$CUSTOM_PLUGIN" <<'LUA'
-return {
-  {
-    "nvim-neo-tree/neo-tree.nvim",
-    opts = {
-      window = {
-        -- decrease the default width of the neo-tree window to 30.
-        width = 30,
-      },
-    },
-  },
-}
-LUA
-  info "Patched plugins/custom.lua"
+  cat > "$YAZI_CONFIG" <<'TOML'
+# [a-terminal] patched
+[mgr]
+show_hidden = true
+ratio = [0, 1, 3]
+TOML
+  info "Patched yazi.toml"
 fi
 
-# ─── 5. claude code ──────────────────────────────────────────────────
+if [ -f "$YAZI_KEYMAP" ] && grep -qF "$YAZI_MARKER" "$YAZI_KEYMAP" 2>/dev/null; then
+  info "keymap.toml already patched"
+else
+  cat > "$YAZI_KEYMAP" <<'TOML'
+# [a-terminal] patched
+[[mgr.prepend_keymap]]
+on = [ "c", "r" ]
+desc = "Copy relative path (from git root) to clipboard"
+run = "shell -- python3 -c \"import os,sys,subprocess; root=subprocess.check_output(['git','rev-parse','--show-toplevel'],cwd=os.path.dirname(sys.argv[1]),stderr=subprocess.DEVNULL).decode().strip(); print(os.path.relpath(sys.argv[1],root),end='')\" \"$0\" | pbcopy"
+
+[[mgr.prepend_keymap]]
+on = [ "s" ]
+desc = "Search file contents (grep via ripgrep)"
+run = "search --via=rg"
+TOML
+  info "Patched keymap.toml"
+fi
+
+# ─── patch vimrc ──────────────────────────────────────────────────────
+VIMRC="$HOME/.vimrc"
+VIMRC_MARKER="\" [a-terminal] patched"
+
+if [ -f "$VIMRC" ] && grep -qF "$VIMRC_MARKER" "$VIMRC" 2>/dev/null; then
+  info ".vimrc already patched"
+else
+  cat > "$VIMRC" <<'VIM'
+" [a-terminal] patched
+syntax on
+set number
+VIM
+  info "Patched .vimrc (line numbers + syntax highlighting)"
+fi
+
+# ─── 3. claude code ──────────────────────────────────────────────────
 echo ""
 echo "── Claude Code ────────────────────────────────────"
 
@@ -158,7 +147,8 @@ fi
 echo ""
 echo "══════════════════════════════════════════════════"
 echo "  Setup complete!"
-echo "  • Run 'nvim' to finish LazyVim plugin install"
+echo "  • Run 'zellij' to start the terminal multiplexer"
+echo "  • Run 'yazi' to browse files"
 echo "  • Run 'claude' to start Claude Code"
 echo "══════════════════════════════════════════════════"
 echo ""
