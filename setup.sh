@@ -23,7 +23,7 @@ install_pkg() {
 # ──────────────────────────────────────────────────────────────────────
 echo ""
 echo "══════════════════════════════════════════════════"
-echo "  Terminal Vibe-Coding Setup"
+echo "  Oh-my-Boy Setup"
 echo "══════════════════════════════════════════════════"
 
 # ─── 1. zellij ────────────────────────────────────────────────────────
@@ -67,7 +67,7 @@ fi
 YAZI_DIR="$HOME/.config/yazi"
 YAZI_CONFIG="$YAZI_DIR/yazi.toml"
 YAZI_KEYMAP="$YAZI_DIR/keymap.toml"
-YAZI_MARKER="# [a-terminal] patched"
+YAZI_MARKER="# [oh-my-boy] patched"
 
 mkdir -p "$YAZI_DIR"
 
@@ -75,7 +75,7 @@ if [ -f "$YAZI_CONFIG" ] && grep -qF "$YAZI_MARKER" "$YAZI_CONFIG" 2>/dev/null; 
   info "yazi.toml already patched"
 else
   cat > "$YAZI_CONFIG" <<'TOML'
-# [a-terminal] patched
+# [oh-my-boy] patched
 [mgr]
 show_hidden = true
 ratio = [0, 1, 3]
@@ -87,11 +87,11 @@ if [ -f "$YAZI_KEYMAP" ] && grep -qF "$YAZI_MARKER" "$YAZI_KEYMAP" 2>/dev/null; 
   info "keymap.toml already patched"
 else
   cat > "$YAZI_KEYMAP" <<'TOML'
-# [a-terminal] patched
+# [oh-my-boy] patched
 [[mgr.prepend_keymap]]
 on = [ "c", "r" ]
 desc = "Copy relative path (from git root) to clipboard"
-run = "shell -- python3 -c \"import os,sys,subprocess; root=subprocess.check_output(['git','rev-parse','--show-toplevel'],cwd=os.path.dirname(sys.argv[1]),stderr=subprocess.DEVNULL).decode().strip(); print(os.path.relpath(sys.argv[1],root),end='')\" \"$0\" | pbcopy"
+run = "shell -- python3 -c \"import os,sys,subprocess,base64; root=subprocess.check_output(['git','rev-parse','--show-toplevel'],cwd=os.path.dirname(sys.argv[1]),stderr=subprocess.DEVNULL).decode().strip(); p=os.path.relpath(sys.argv[1],root); b=base64.b64encode(p.encode()).decode(); sys.stdout.write('\\x1b]52;c;'+b+'\\x07'); sys.stdout.flush()\" \"$0\""
 
 [[mgr.prepend_keymap]]
 on = [ "s" ]
@@ -101,15 +101,30 @@ TOML
   info "Patched keymap.toml"
 fi
 
+# ─── patch tmux config ────────────────────────────────────────────────
+TMUX_CONF="$HOME/.tmux.conf"
+TMUX_MARKER="# [oh-my-boy] patched"
+
+if [ -f "$TMUX_CONF" ] && grep -qF "$TMUX_MARKER" "$TMUX_CONF" 2>/dev/null; then
+  info ".tmux.conf already patched"
+else
+  cat > "$TMUX_CONF" <<'TMUX'
+# [oh-my-boy] patched
+set -g set-clipboard on
+set -g allow-passthrough on
+TMUX
+  info "Patched .tmux.conf (OSC 52 clipboard passthrough)"
+fi
+
 # ─── patch vimrc ──────────────────────────────────────────────────────
 VIMRC="$HOME/.vimrc"
-VIMRC_MARKER="\" [a-terminal] patched"
+VIMRC_MARKER="\" [oh-my-boy] patched"
 
 if [ -f "$VIMRC" ] && grep -qF "$VIMRC_MARKER" "$VIMRC" 2>/dev/null; then
   info ".vimrc already patched"
 else
   cat > "$VIMRC" <<'VIM'
-" [a-terminal] patched
+" [oh-my-boy] patched
 syntax on
 set number
 VIM
@@ -132,16 +147,16 @@ fi
 echo ""
 echo "── boy command ──────────────────────────────"
 
-ATERMINAL_BIN="$HOME/.local/bin/boy"
-ATERMINAL_MARKER="# [a-terminal]"
+BOY_BIN="$HOME/.local/bin/boy"
+BOY_MARKER="# [oh-my-boy]"
 
-if [ -f "$ATERMINAL_BIN" ] && grep -qF "$ATERMINAL_MARKER" "$ATERMINAL_BIN" 2>/dev/null; then
+if [ -f "$BOY_BIN" ] && grep -qF "$BOY_MARKER" "$BOY_BIN" 2>/dev/null; then
   info "boy command already installed"
 else
   mkdir -p "$HOME/.local/bin"
-  cat > "$ATERMINAL_BIN" <<'SCRIPT'
+  cat > "$BOY_BIN" <<'SCRIPT'
 #!/usr/bin/env bash
-# [a-terminal]
+# [oh-my-boy]
 set -euo pipefail
 
 if [ $# -lt 1 ]; then
@@ -158,8 +173,8 @@ else
   tmux attach-session -t "$SESSION_NAME"
 fi
 SCRIPT
-  chmod +x "$ATERMINAL_BIN"
-  info "Installed boy command to $ATERMINAL_BIN"
+  chmod +x "$BOY_BIN"
+  info "Installed boy command to $BOY_BIN"
 fi
 
 # ensure ~/.local/bin is in PATH
