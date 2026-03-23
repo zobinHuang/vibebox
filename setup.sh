@@ -128,11 +128,51 @@ else
   info "Claude Code installed"
 fi
 
+# ─── 4. install aterminal command ─────────────────────────────────────
+echo ""
+echo "── aterminal command ──────────────────────────────"
+
+ATERMINAL_BIN="$HOME/.local/bin/aterminal"
+ATERMINAL_MARKER="# [a-terminal]"
+
+if [ -f "$ATERMINAL_BIN" ] && grep -qF "$ATERMINAL_MARKER" "$ATERMINAL_BIN" 2>/dev/null; then
+  info "aterminal command already installed"
+else
+  mkdir -p "$HOME/.local/bin"
+  cat > "$ATERMINAL_BIN" <<'SCRIPT'
+#!/usr/bin/env bash
+# [a-terminal]
+set -euo pipefail
+
+if [ $# -lt 1 ]; then
+  echo "Usage: aterminal <session-name>"
+  exit 1
+fi
+
+SESSION_NAME="$(whoami)-$1"
+
+if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+  tmux attach-session -t "$SESSION_NAME"
+else
+  tmux new-session -d -s "$SESSION_NAME" 'zellij'
+  tmux attach-session -t "$SESSION_NAME"
+fi
+SCRIPT
+  chmod +x "$ATERMINAL_BIN"
+  info "Installed aterminal command to $ATERMINAL_BIN"
+fi
+
+# ensure ~/.local/bin is in PATH
+if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
+  warn "Add ~/.local/bin to your PATH. For example:"
+  warn "  echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc"
+fi
+
 # ─── done ─────────────────────────────────────────────────────────────
 echo ""
 echo "══════════════════════════════════════════════════"
 echo "  Setup complete!"
-echo "  • Run 'zellij' to start the terminal multiplexer"
+echo "  • Run 'aterminal <name>' to start a tmux+zellij session"
 echo "  • Run 'yazi' to browse files"
 echo "  • Run 'claude' to start Claude Code"
 echo "══════════════════════════════════════════════════"
