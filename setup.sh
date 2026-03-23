@@ -83,6 +83,9 @@ else
 [mgr]
 show_hidden = true
 ratio = [0, 1, 3]
+
+[preview]
+image_enabled = false
 TOML
   info "Patched yazi.toml"
 fi
