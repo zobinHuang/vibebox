@@ -11,20 +11,13 @@ info()  { echo -e "${GREEN}[✓]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[!]${NC} $*"; }
 err()   { echo -e "${RED}[✗]${NC} $*"; }
 
-# ─── detect package manager ──────────────────────────────────────────
+# ─── install via conda ────────────────────────────────────────────────
 install_pkg() {
-  if command -v brew &>/dev/null; then
-    brew install "$@"
-  elif command -v apt-get &>/dev/null; then
-    sudo apt-get update -qq && sudo apt-get install -y "$@"
-  elif command -v dnf &>/dev/null; then
-    sudo dnf install -y "$@"
-  elif command -v pacman &>/dev/null; then
-    sudo pacman -S --noconfirm "$@"
-  else
-    err "No supported package manager found. Please install manually: $*"
+  if ! command -v conda &>/dev/null; then
+    err "conda not found. Please install Miniconda or Anaconda first."
     return 1
   fi
+  conda install -y -c conda-forge "$@"
 }
 
 # ──────────────────────────────────────────────────────────────────────
@@ -57,21 +50,13 @@ else
   info "Yazi installed"
 fi
 
-# Nerd Font (required for yazi icons)
+# Nerd Font (required for yazi icons — not available via conda)
 if command -v brew &>/dev/null; then
   if brew list --cask font-symbols-only-nerd-font &>/dev/null 2>&1; then
     info "Nerd Font already installed"
   else
     warn "Installing Nerd Font …"
     brew install --cask font-symbols-only-nerd-font
-    info "Nerd Font installed"
-  fi
-elif command -v pacman &>/dev/null; then
-  if pacman -Q ttf-nerd-fonts-symbols &>/dev/null 2>&1; then
-    info "Nerd Font already installed"
-  else
-    warn "Installing Nerd Font …"
-    sudo pacman -S --noconfirm ttf-nerd-fonts-symbols
     info "Nerd Font installed"
   fi
 else
