@@ -11,13 +11,25 @@ info()  { echo -e "${GREEN}[✓]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[!]${NC} $*"; }
 err()   { echo -e "${RED}[✗]${NC} $*"; }
 
-# ─── install via conda ────────────────────────────────────────────────
+# ─── install via conda (into dedicated vibebox env) ─────────────────
+VBOX_ENV="vibebox"
 install_pkg() {
   if ! command -v conda &>/dev/null; then
     err "conda not found. Please install Miniconda or Anaconda first."
     return 1
   fi
-  conda install -y -c conda-forge "$@"
+  # create env if it doesn't exist
+  if ! conda env list | grep -q "^${VBOX_ENV} "; then
+    conda create -y -n "$VBOX_ENV" -c conda-forge --no-default-packages 2>/dev/null
+  fi
+  conda install -y -n "$VBOX_ENV" -c conda-forge "$@"
+}
+
+# helper: resolve path to a binary installed in the vibebox env
+vbox_bin() {
+  local CONDA_PREFIX
+  CONDA_PREFIX="$(conda info --envs 2>/dev/null | grep "^${VBOX_ENV} " | awk '{print $NF}')"
+  echo "${CONDA_PREFIX}/bin/$1"
 }
 
 # ──────────────────────────────────────────────────────────────────────
@@ -36,6 +48,8 @@ echo "── Zellij ────────────────────
 
 if command -v zellij &>/dev/null; then
   info "Zellij already installed ($(zellij --version))"
+elif [ -x "$(vbox_bin zellij)" ]; then
+  info "Zellij already installed in vibebox env"
 else
   warn "Installing Zellij …"
   install_pkg zellij
@@ -48,6 +62,8 @@ echo "── Yazi ────────────────────�
 
 if command -v yazi &>/dev/null; then
   info "Yazi already installed ($(yazi --version))"
+elif [ -x "$(vbox_bin yazi)" ]; then
+  info "Yazi already installed in vibebox env"
 else
   warn "Installing Yazi …"
   install_pkg yazi
@@ -271,10 +287,20 @@ printf '%s\n' '#!/usr/bin/env bash' \
 chmod +x "$VBOX_BIN"
 info "Installed vbox command to $VBOX_BIN"
 
-# ensure ~/.local/bin is in PATH
-if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
-  warn "Add ~/.local/bin to your PATH. For example:"
-  warn "  echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc"
+# ensure ~/.local/bin and vibebox env bin are in PATH
+VBOX_ENV_BIN="$(conda info --envs 2>/dev/null | grep "^${VBOX_ENV} " | awk '{print $NF}')/bin"
+SHELL_RC="$HOME/.bashrc"
+[ -n "${ZSH_VERSION:-}" ] && SHELL_RC="$HOME/.zshrc"
+
+PATH_LINE="export PATH=\"\$HOME/.local/bin:${VBOX_ENV_BIN}:\$PATH\""
+PATH_MARKER="# [vibebox] path"
+
+if grep -qF "$PATH_MARKER" "$SHELL_RC" 2>/dev/null; then
+  info "PATH already configured in $(basename "$SHELL_RC")"
+else
+  printf '\n%s\n%s\n' "$PATH_MARKER" "$PATH_LINE" >> "$SHELL_RC"
+  info "Added vibebox PATH to $(basename "$SHELL_RC")"
+  warn "Run 'source $SHELL_RC' or restart your shell"
 fi
 
 # ─── done ─────────────────────────────────────────────────────────────
