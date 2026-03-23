@@ -116,8 +116,10 @@ else
 # [vibebox] patched
 set -g set-clipboard on
 set -g allow-passthrough on
+set -g mouse on
+set -g mode-keys vi
 TMUX
-  info "Patched .tmux.conf (OSC 52 clipboard passthrough)"
+  info "Patched .tmux.conf (OSC 52 clipboard, mouse, vi copy mode)"
 fi
 
 # ─── patch vimrc ──────────────────────────────────────────────────────
