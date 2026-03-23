@@ -18,9 +18,11 @@ curl -fsSL https://raw.githubusercontent.com/zobinHuang/a-terminal/main/setup.sh
 ## Usage
 
 ```bash
-boy <session-name>
+boy <name>            # Create and attach to a new tmux+zellij session
+boy attach <name>     # Attach to an existing session
+boy exit              # Kill current zellij+tmux session
 ```
 
-Opens a tmux session named `<username>-<session-name>` with zellij running inside. Re-running the same command reattaches to the existing session.
+Sessions are named `<username>-<name>`. Running `boy <name>` on an existing session reattaches to it.
 
 Re-running the install script is safe — it skips anything already installed.

@@ -159,19 +159,60 @@ else
 # [oh-my-boy]
 set -euo pipefail
 
-if [ $# -lt 1 ]; then
-  echo "Usage: boy <session-name>"
+usage() {
+  echo "Usage:"
+  echo "  boy <session-name>    Create and attach to a new tmux+zellij session"
+  echo "  boy attach <name>     Attach to an existing session"
+  echo "  boy exit              Kill current zellij and tmux session"
   exit 1
+}
+
+if [ $# -lt 1 ]; then
+  usage
 fi
 
-SESSION_NAME="$(whoami)-$1"
+CMD="$1"
 
-if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
-  tmux attach-session -t "$SESSION_NAME"
-else
-  tmux new-session -d -s "$SESSION_NAME" 'zellij'
-  tmux attach-session -t "$SESSION_NAME"
-fi
+case "$CMD" in
+  exit)
+    # kill zellij first, then the tmux session
+    if command -v zellij &>/dev/null && [ -n "${ZELLIJ:-}" ]; then
+      zellij action quit
+    fi
+    if [ -n "${TMUX:-}" ]; then
+      tmux kill-session
+    else
+      echo "Not inside a tmux session."
+    fi
+    ;;
+  attach)
+    if [ $# -lt 2 ]; then
+      echo "Usage: boy attach <session-name>"
+      exit 1
+    fi
+    SESSION_NAME="$(whoami)-$2"
+    if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+      tmux attach-session -t "$SESSION_NAME"
+    else
+      echo "Session '$SESSION_NAME' not found."
+      echo "Available sessions:"
+      tmux list-sessions 2>/dev/null || echo "  (none)"
+      exit 1
+    fi
+    ;;
+  -h|--help)
+    usage
+    ;;
+  *)
+    SESSION_NAME="$(whoami)-$CMD"
+    if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+      tmux attach-session -t "$SESSION_NAME"
+    else
+      tmux new-session -d -s "$SESSION_NAME" 'zellij'
+      tmux attach-session -t "$SESSION_NAME"
+    fi
+    ;;
+esac
 SCRIPT
   chmod +x "$BOY_BIN"
   info "Installed boy command to $BOY_BIN"
@@ -187,8 +228,11 @@ fi
 echo ""
 echo "══════════════════════════════════════════════════"
 echo "  Setup complete!"
-echo "  • Run 'boy <name>' to start a tmux+zellij session"
-echo "  • Run 'yazi' to browse files"
-echo "  • Run 'claude' to start Claude Code"
+echo "  boy <name>           Create a new tmux+zellij session"
+echo "  boy attach <name>    Attach to an existing session"
+echo "  boy exit             Kill current zellij+tmux session"
+echo ""
+echo "  yazi                 Browse files"
+echo "  claude               Start Claude Code"
 echo "══════════════════════════════════════════════════"
 echo ""
