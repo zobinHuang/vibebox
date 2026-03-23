@@ -116,7 +116,7 @@ cat > "$YAZI_KEYMAP" <<'TOML'
 [[mgr.prepend_keymap]]
 on = [ "c", "r" ]
 desc = "Copy relative path (from git root) to clipboard"
-run = "shell -- python3 -c \"import os,sys,subprocess; root=subprocess.check_output(['git','rev-parse','--show-toplevel'],cwd=os.path.dirname(sys.argv[1]),stderr=subprocess.DEVNULL).decode().strip(); p=os.path.relpath(sys.argv[1],root); subprocess.run([os.path.expanduser('~/.local/bin/osc52-copy')],input=p.encode(),check=True)\" \"$0\""
+run = "shell -- bash -c 'ROOT=$(git -C \"$(dirname \"$1\")\" rev-parse --show-toplevel 2>/dev/null) && REL=$(python3 -c \"import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))\" \"$1\" \"$ROOT\") && printf \"%s\" \"$REL\" | $HOME/.local/bin/osc52-copy' _ \"$0\""
 
 [[mgr.prepend_keymap]]
 on = [ "s" ]
@@ -141,9 +141,10 @@ info "Patched .tmux.conf (OSC 52 clipboard, mouse, vi copy mode)"
 OSC52_BIN="$HOME/.local/bin/osc52-copy"
 printf '%s\n' '#!/usr/bin/env bash' \
   'data=$(base64 | tr -d '\''\n'\'')' \
-  'if [ -n "${TMUX:-}" ]; then' \
-  '  TMUX_PANE_TTY=$(tmux display-message -p "#{pane_tty}")' \
-  '  printf '\''\033]52;c;%s\a'\'' "$data" > "$TMUX_PANE_TTY"' \
+  '# try tmux pane TTY first (works inside zellij+tmux)' \
+  'PANE_TTY=$(tmux display-message -p "#{pane_tty}" 2>/dev/null || true)' \
+  'if [ -n "$PANE_TTY" ] && [ -e "$PANE_TTY" ]; then' \
+  '  printf '\''\033]52;c;%s\a'\'' "$data" > "$PANE_TTY"' \
   'else' \
   '  printf '\''\033]52;c;%s\a'\'' "$data" > /dev/tty' \
   'fi' > "$OSC52_BIN"
