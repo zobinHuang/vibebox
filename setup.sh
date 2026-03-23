@@ -122,6 +122,14 @@ TMUX
   info "Patched .tmux.conf (OSC 52 clipboard, mouse, vi copy mode)"
 fi
 
+# ─── install OSC 52 clipboard helper ─────────────────────────────────
+OSC52_BIN="$HOME/.local/bin/osc52-copy"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'data=$(base64 | tr -d '\''\n'\'')' \
+  'printf '\''\033]52;c;%s\a'\'' "$data"' > "$OSC52_BIN"
+chmod +x "$OSC52_BIN"
+info "Installed osc52-copy helper"
+
 # ─── patch zellij config ─────────────────────────────────────────────
 ZELLIJ_DIR="$HOME/.config/zellij"
 ZELLIJ_CONFIG="$ZELLIJ_DIR/config.kdl"
@@ -132,13 +140,12 @@ mkdir -p "$ZELLIJ_DIR"
 if [ -f "$ZELLIJ_CONFIG" ] && grep -qF "$ZELLIJ_MARKER" "$ZELLIJ_CONFIG" 2>/dev/null; then
   info "zellij config already patched"
 else
-  cat > "$ZELLIJ_CONFIG" <<'KDL'
-// [vibebox] patched
-copy_on_select true
-copy_clipboard "system"
-scrollback_editor "vim"
-KDL
-  info "Patched zellij config (OSC 52 clipboard, copy on select)"
+  printf '%s\n' \
+    '// [vibebox] patched' \
+    'copy_on_select true' \
+    "copy_command \"$HOME/.local/bin/osc52-copy\"" \
+    'scrollback_editor "vim"' > "$ZELLIJ_CONFIG"
+  info "Patched zellij config (OSC 52 clipboard via osc52-copy)"
 fi
 
 # ─── patch vimrc ──────────────────────────────────────────────────────
