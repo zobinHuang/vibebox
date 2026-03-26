@@ -156,6 +156,11 @@ bind -n M-- split-window -v -c "#{pane_current_path}"
 # ─── tab/pane management ─────────────────────────────────────────────
 bind -n M-t new-window -c "#{pane_current_path}"
 bind -n M-w kill-pane
+bind -n M-r command-prompt -I "#W" "rename-window '%%'"
+
+# ─── keep custom tab names ───────────────────────────────────────────
+setw -g automatic-rename off
+set -g allow-rename off
 
 # ─── windows start at 1 (not 0) ─────────────────────────────────────
 set -g base-index 1
