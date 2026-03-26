@@ -290,13 +290,26 @@ printf '%s\n' '#!/usr/bin/env bash' \
   '  ls)' \
   '    PREFIX="$(whoami)-"' \
   '    FOUND=0' \
-  '    while IFS= read -r line; do' \
-  '      NAME="${line%%:*}"' \
-  '      if [[ "$NAME" == "$PREFIX"* ]]; then' \
-  '        echo "  ${NAME#$PREFIX}"' \
+  '    NOW=$(date +%s)' \
+  '    while IFS="|" read -r SNAME CREATED; do' \
+  '      if [[ "$SNAME" == "$PREFIX"* ]]; then' \
+  '        SHORT="${SNAME#$PREFIX}"' \
+  '        ELAPSED=$(( NOW - CREATED ))' \
+  '        DAYS=$(( ELAPSED / 86400 ))' \
+  '        HOURS=$(( (ELAPSED % 86400) / 3600 ))' \
+  '        MINS=$(( (ELAPSED % 3600) / 60 ))' \
+  '        if [ "$DAYS" -gt 0 ]; then' \
+  '          DUR="${DAYS}d ${HOURS}h"' \
+  '        elif [ "$HOURS" -gt 0 ]; then' \
+  '          DUR="${HOURS}h ${MINS}m"' \
+  '        else' \
+  '          DUR="${MINS}m"' \
+  '        fi' \
+  '        CREATED_FMT=$(date -d "@$CREATED" "+%Y-%m-%d %H:%M" 2>/dev/null || date -r "$CREATED" "+%Y-%m-%d %H:%M" 2>/dev/null || echo "unknown")' \
+  '        printf "  %-20s created: %s  uptime: %s\n" "$SHORT" "$CREATED_FMT" "$DUR"' \
   '        FOUND=1' \
   '      fi' \
-  '    done < <(tmux list-sessions 2>/dev/null || true)' \
+  '    done < <(tmux list-sessions -F "#{session_name}|#{session_created}" 2>/dev/null || true)' \
   '    if [ "$FOUND" -eq 0 ]; then' \
   '      echo "No vbox sessions."' \
   '    fi' \
