@@ -128,6 +128,11 @@ bind -n M-Left previous-window
 bind -n M-Right next-window
 bind -n M-Up select-pane -U
 bind -n M-Down select-pane -D
+# raw escape sequences for terminals that don't send M-arrow
+bind -n "\e[1;3D" previous-window
+bind -n "\e[1;3C" next-window
+bind -n "\e[1;3A" select-pane -U
+bind -n "\e[1;3B" select-pane -D
 
 # ─── tab mode: Ctrl+t → action ───────────────────────────────────────
 bind -n C-t switch-client -T tab_mode
