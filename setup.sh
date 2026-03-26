@@ -157,6 +157,17 @@ bind -T pane_mode k select-pane -U
 bind -T pane_mode l select-pane -R
 bind -T pane_mode z resize-pane -Z
 
+# ─── resize mode: Ctrl+n → h/j/k/l (repeatable) ────────────────────
+bind -n C-n switch-client -T resize_mode
+bind -r -T resize_mode h resize-pane -L 2
+bind -r -T resize_mode j resize-pane -D 2
+bind -r -T resize_mode k resize-pane -U 2
+bind -r -T resize_mode l resize-pane -R 2
+bind -r -T resize_mode Left resize-pane -L 2
+bind -r -T resize_mode Right resize-pane -R 2
+bind -r -T resize_mode Up resize-pane -U 2
+bind -r -T resize_mode Down resize-pane -D 2
+
 # ─── keep custom tab names ───────────────────────────────────────────
 setw -g automatic-rename off
 set -g allow-rename off
@@ -339,6 +350,8 @@ echo "    r   rename tab           n   split right"
 echo "    ←/→ switch tab           ←/→/↑/↓ navigate"
 echo "    x   close tab            x   close pane"
 echo "                             z   toggle fullscreen"
+echo ""
+echo "  Resize (Ctrl+n):  h/j/k/l or arrows (repeatable)"
 echo ""
 echo "  Tools:"
 echo "    yazi       file manager"

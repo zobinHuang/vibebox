@@ -46,6 +46,12 @@ vbox exit              # Kill current session
 | `x` | Close pane |
 | `z` | Toggle fullscreen (zoom) |
 
+### Resize (`Ctrl+n` then...)
+
+| Key | Action |
+|---|---|
+| `h/j/k/l` or arrows | Resize pane (repeatable) |
+
 ### Yazi (file manager)
 
 | Key | Action |
