@@ -187,8 +187,8 @@ set -g renumber-windows on
 # ─── status bar (tab bar) ────────────────────────────────────────────
 set -g status-position bottom
 set -g status-style "bg=#1e1e2e,fg=#cdd6f4"
-set -g status-left-length 30
-set -g status-left "#[bg=#89b4fa,fg=#1e1e2e,bold] ◆ #S #[default] "
+set -g status-left-length 45
+set -g status-left "#[bg=#cba6f7,fg=#1e1e2e,bold] VibeBox #[default] #[bg=#89b4fa,fg=#1e1e2e,bold] ◆ #S #[default] "
 set -g status-right-length 65
 set -g status-right "#[fg=#a6e3a1]running #(NOW=$(date +%%s); C=#{session_created}; E=$((NOW-C)); D=$((E/86400)); H=$(((E%%86400)/3600)); M=$(((E%%3600)/60)); S=$((E%%60)); [ $D -gt 0 ] && printf '%%dd %%dh %%dm' $D $H $M || { [ $H -gt 0 ] && printf '%%dh %%dm %%ds' $H $M $S || printf '%%dm %%ds' $M $S; }) #[fg=#a6adc8]│ %Y-%m-%d %H:%M "
 set -g status-interval 1
