@@ -188,11 +188,11 @@ set -g renumber-windows on
 set -g status-position bottom
 set -g status-style "bg=#1e1e2e,fg=#cdd6f4"
 set -g status-left-length 30
-set -g status-left "#[bg=#89b4fa,fg=#1e1e2e,bold] #S #[default] "
-set -g status-right-length 40
-set -g status-right "#[fg=#a6adc8] %Y-%m-%d %H:%M "
-setw -g window-status-format "#[fg=#a6adc8] #I:#W "
-setw -g window-status-current-format "#[bg=#45475a,fg=#89b4fa,bold] #I:#W "
+set -g status-left "#[bg=#89b4fa,fg=#1e1e2e,bold]  #S #[default] "
+set -g status-right-length 45
+set -g status-right "#[fg=#a6adc8]  %Y-%m-%d   %H:%M "
+setw -g window-status-format "#[fg=#a6adc8]  #I:#W "
+setw -g window-status-current-format "#[bg=#45475a,fg=#89b4fa,bold]  #I:#W "
 setw -g window-status-separator ""
 
 # ─── pane borders ────────────────────────────────────────────────────
