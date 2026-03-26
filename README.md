@@ -10,7 +10,7 @@ curl -fsSL -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/zobinH
 
 ## What it installs
 
-- **tmux** — session, tab, and pane management (with custom keybindings)
+- **tmux** — session, tab, and pane management (with zellij-style keybindings)
 - **Yazi** — terminal file manager
 - **Claude Code** — AI coding assistant
 - **vbox** — command to manage tmux sessions
@@ -18,36 +18,39 @@ curl -fsSL -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/zobinH
 ## Usage
 
 ```bash
-vbox new <name>        # Create and attach to a new session
-vbox attach <name>     # Attach to an existing session
-vbox ls                # List all vbox sessions
+vbox new <name>        # Create a new session
+vbox attach <name>     # Attach to existing session
+vbox ls                # List all sessions
 vbox exit              # Kill current session
 ```
 
 ## Keybindings
 
-### Tabs (windows)
+### Tabs (`Ctrl+t` then...)
 
-| Action | Keybinding |
+| Key | Action |
 |---|---|
-| New tab | `Alt+t` |
-| Rename tab | `Alt+r` |
-| Switch tab left/right | `Alt+Left` / `Alt+Right` |
-| Close pane/tab | `Alt+w` |
+| `n` | New tab |
+| `r` | Rename tab |
+| `Left` / `Right` or `h` / `l` | Switch tab |
+| `1`–`9` | Jump to tab by number |
+| `x` | Close tab |
 
-### Panes
+### Panes (`Ctrl+p` then...)
 
-| Action | Keybinding |
+| Key | Action |
 |---|---|
-| Split vertical | `Alt+\` |
-| Split horizontal | `Alt+-` |
-| Navigate panes | `Alt+Up/Down` or `Alt+h/j/k/l` |
+| `d` | Split down |
+| `n` | Split right |
+| `Left/Right/Up/Down` or `h/j/k/l` | Navigate panes |
+| `x` | Close pane |
+| `z` | Toggle fullscreen (zoom) |
 
 ### Yazi (file manager)
 
-| Action | Keybinding |
+| Key | Action |
 |---|---|
-| Copy relative path | `cr` |
-| Search file contents | `s` |
+| `cr` | Copy relative path to clipboard |
+| `s` | Search file contents |
 
 Sessions are named `<username>-<name>`. Re-running the install script is safe — it always updates configs to the latest version.

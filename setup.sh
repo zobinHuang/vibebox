@@ -123,26 +123,39 @@ set -g allow-passthrough on
 set -g mouse on
 set -g mode-keys vi
 
-# ─── tab (window) navigation: Alt + Left/Right ──────────────────────
-bind -n M-Left previous-window
-bind -n M-Right next-window
+# ─── tab mode: Ctrl+t → action ───────────────────────────────────────
+bind -n C-t switch-client -T tab_mode
+bind -T tab_mode n new-window -c "#{pane_current_path}"
+bind -T tab_mode r command-prompt -I "#W" "rename-window '%%'"
+bind -T tab_mode x kill-window
+bind -T tab_mode Left previous-window
+bind -T tab_mode Right next-window
+bind -T tab_mode h previous-window
+bind -T tab_mode l next-window
+bind -T tab_mode 1 select-window -t 1
+bind -T tab_mode 2 select-window -t 2
+bind -T tab_mode 3 select-window -t 3
+bind -T tab_mode 4 select-window -t 4
+bind -T tab_mode 5 select-window -t 5
+bind -T tab_mode 6 select-window -t 6
+bind -T tab_mode 7 select-window -t 7
+bind -T tab_mode 8 select-window -t 8
+bind -T tab_mode 9 select-window -t 9
 
-# ─── pane navigation: Alt + Up/Down/h/j/k/l ─────────────────────────
-bind -n M-Up select-pane -U
-bind -n M-Down select-pane -D
-bind -n M-h select-pane -L
-bind -n M-j select-pane -D
-bind -n M-k select-pane -U
-bind -n M-l select-pane -R
-
-# ─── pane splitting: Alt + \ and Alt + - ─────────────────────────────
-bind -n M-\\ split-window -h -c "#{pane_current_path}"
-bind -n M-- split-window -v -c "#{pane_current_path}"
-
-# ─── tab/pane management ─────────────────────────────────────────────
-bind -n M-t new-window -c "#{pane_current_path}"
-bind -n M-w kill-pane
-bind -n M-r command-prompt -I "#W" "rename-window '%%'"
+# ─── pane mode: Ctrl+p → action ─────────────────────────────────────
+bind -n C-p switch-client -T pane_mode
+bind -T pane_mode d split-window -v -c "#{pane_current_path}"
+bind -T pane_mode n split-window -h -c "#{pane_current_path}"
+bind -T pane_mode x kill-pane
+bind -T pane_mode Left select-pane -L
+bind -T pane_mode Right select-pane -R
+bind -T pane_mode Up select-pane -U
+bind -T pane_mode Down select-pane -D
+bind -T pane_mode h select-pane -L
+bind -T pane_mode j select-pane -D
+bind -T pane_mode k select-pane -U
+bind -T pane_mode l select-pane -R
+bind -T pane_mode z resize-pane -Z
 
 # ─── keep custom tab names ───────────────────────────────────────────
 setw -g automatic-rename off
@@ -320,11 +333,12 @@ echo "    vbox attach <name>    Attach to existing session"
 echo "    vbox ls               List all sessions"
 echo "    vbox exit             Kill current session"
 echo ""
-echo "  Tabs:                   Panes:"
-echo "    Alt+t      new tab      Alt+\\     split vertical"
-echo "    Alt+r      rename tab   Alt+-      split horizontal"
-echo "    Alt+←/→    switch tab   Alt+↑/↓    switch pane"
-echo "    Alt+w      close pane   Alt+hjkl   switch pane"
+echo "  Tabs (Ctrl+t):          Panes (Ctrl+p):"
+echo "    n   new tab              d   split down"
+echo "    r   rename tab           n   split right"
+echo "    ←/→ switch tab           ←/→/↑/↓ navigate"
+echo "    x   close tab            x   close pane"
+echo "                             z   toggle fullscreen"
 echo ""
 echo "  Tools:"
 echo "    yazi       file manager"
