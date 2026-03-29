@@ -124,9 +124,10 @@ set -g allow-passthrough on
 set -g mouse on
 set -g mode-keys vi
 
-# ─── mouse select → copy to system clipboard via OSC 52 ─────────────
-bind -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-selection-and-cancel
-bind -T copy-mode MouseDragEnd1Pane send-keys -X copy-selection-and-cancel
+# ─── mouse/vi copy → pipe through osc52-copy for clipboard ──────────
+bind -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "~/.local/bin/osc52-copy"
+bind -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "~/.local/bin/osc52-copy"
+bind -T copy-mode-vi y send-keys -X copy-pipe-and-cancel "~/.local/bin/osc52-copy"
 
 # ─── smart navigation: Alt + arrows (pane first, then tab) ──────────
 bind -n M-Left if-shell -F "#{pane_at_left}" "previous-window" "select-pane -L"
