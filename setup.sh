@@ -213,15 +213,15 @@ info "Patched .tmux.conf (tabs, panes, Alt keybindings, status bar)"
 # ─── install OSC 52 clipboard helper ─────────────────────────────────
 mkdir -p "$HOME/.local/bin"
 OSC52_BIN="$HOME/.local/bin/osc52-copy"
-printf '%s\n' '#!/usr/bin/env bash' \
-  'data=$(base64 | tr -d '\''\n'\'')' \
-  '# try tmux pane TTY first (works inside zellij+tmux)' \
-  'PANE_TTY=$(tmux display-message -p "#{pane_tty}" 2>/dev/null || true)' \
-  'if [ -n "$PANE_TTY" ] && [ -e "$PANE_TTY" ]; then' \
-  '  printf '\''\033]52;c;%s\a'\'' "$data" > "$PANE_TTY"' \
-  'else' \
-  '  printf '\''\033]52;c;%s\a'\'' "$data" > /dev/tty' \
-  'fi' > "$OSC52_BIN"
+printf '%s' '#!/usr/bin/env bash
+data=$(base64 | tr -d '"'"'\n'"'"')
+PANE_TTY=$(tmux display-message -p "#{pane_tty}" 2>/dev/null || true)
+if [ -n "$PANE_TTY" ] && [ -e "$PANE_TTY" ]; then
+  printf '"'"'\033]52;c;%s\a'"'"' "$data" > "$PANE_TTY"
+else
+  printf '"'"'\033]52;c;%s\a'"'"' "$data" > /dev/tty
+fi
+' > "$OSC52_BIN"
 chmod +x "$OSC52_BIN"
 info "Installed osc52-copy helper"
 
