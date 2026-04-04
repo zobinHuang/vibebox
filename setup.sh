@@ -211,6 +211,7 @@ TMUX
 info "Patched .tmux.conf (tabs, panes, Alt keybindings, status bar)"
 
 # ─── install OSC 52 clipboard helper ─────────────────────────────────
+mkdir -p "$HOME/.local/bin"
 OSC52_BIN="$HOME/.local/bin/osc52-copy"
 printf '%s\n' '#!/usr/bin/env bash' \
   'data=$(base64 | tr -d '\''\n'\'')' \
