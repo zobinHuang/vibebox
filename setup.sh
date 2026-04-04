@@ -20,9 +20,9 @@ install_pkg() {
   fi
   # create env if it doesn't exist
   if ! conda env list | grep -q "^${VBOX_ENV} "; then
-    conda create -y -n "$VBOX_ENV" -c conda-forge --no-default-packages 2>/dev/null
+    conda create -y -n "$VBOX_ENV" -c conda-forge --no-default-packages < /dev/null 2>/dev/null
   fi
-  conda install -y -n "$VBOX_ENV" -c conda-forge "$@"
+  conda install -y -n "$VBOX_ENV" -c conda-forge "$@" < /dev/null
 }
 
 # helper: resolve path to a binary installed in the vibebox env
