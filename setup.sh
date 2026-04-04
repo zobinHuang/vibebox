@@ -123,7 +123,7 @@ cat > "$TMUX_CONF" <<'TMUX'
 # ─── clipboard & input ───────────────────────────────────────────────
 set -g default-terminal "xterm-256color"
 set -g set-clipboard on
-set -g allow-passthrough on
+if-shell "tmux -V | awk '{if($2+0 >= 3.3) exit 0; else exit 1}'" "set -g allow-passthrough on" ""
 set -g mouse on
 set -g mode-keys vi
 
