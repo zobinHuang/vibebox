@@ -218,18 +218,26 @@ set -g renumber-windows on
 set -g status-position bottom
 set -g status-style "bg=#1e1e2e,fg=#cdd6f4"
 set -g status-left-length 80
+# One attribute per #[...] here, as in the agent rows below: a comma
+# inside #[bg=x,fg=y] sits inside a #{?...}, and escaping it as "#," is
+# only understood by newer tmux. Older builds split the conditional at
+# that comma instead and print the rest of the style as literal text
+# (seen on CentOS as `fg=#1e1e2e#,bold] PASSTHRU ,` in the bar).
+#
 # `#h` is tmux's short hostname (no domain). A bright yellow [PASSTHRU]
 # block appears when F12 has switched the active key-table to "off"
 # (nested-tmux passthrough mode).
-set -g status-left "#[bg=#cba6f7,fg=#1e1e2e,bold] VibeBox [#h] #[default] #[bg=#89b4fa,fg=#1e1e2e,bold] ◆ #S #[default]#{?#{==:#{client_key_table},off}, #[bg=#f9e2af#,fg=#1e1e2e#,bold] PASSTHRU #[default],} "
+set -g status-left "#[bg=#cba6f7,fg=#1e1e2e,bold] VibeBox [#h] #[default] #[bg=#89b4fa,fg=#1e1e2e,bold] ◆ #S #[default]#{?#{==:#{client_key_table},off}, #[bg=#f9e2af]#[fg=#1e1e2e]#[bold] PASSTHRU #[default],} "
 set -g status-right-length 80
 # Per-tab uptime (#(vbox-uptime)) + clock. vbox-uptime prints the elapsed
 # time since the current window (tab) was created, falling back to session
 # creation for windows that pre-date the install.
 set -g status-right "#[fg=#a6e3a1]running #($HOME/.local/bin/vbox-uptime)#[default] #[fg=#a6adc8]│ %Y-%m-%d %H:%M "
 set -g status-interval 1
-setw -g window-status-format "#[fg=#a6adc8] #I:#{=/14/…:window_name} "
-setw -g window-status-current-format "#[bg=#45475a,fg=#89b4fa,bold] ▸ #I:#{=/14/…:window_name} "
+# #{=14:...} is the plain trim, understood far back; the #{=/14/…:...}
+# form that appends an ellipsis is newer and renders empty on old tmux.
+setw -g window-status-format "#[fg=#a6adc8] #I:#{=14:window_name} "
+setw -g window-status-current-format "#[bg=#45475a,fg=#89b4fa,bold] ▸ #I:#{=14:window_name} "
 setw -g window-status-separator ""
 
 # ─── agent bar: READY / BUSY rows ────────────────────────────────────
@@ -248,12 +256,12 @@ setw -g window-status-separator ""
 
 # READY row items — anything not busy: waiting on you, idle, or a plain
 # tab that has never run an agent (dim, no glyph).
-set -g @vbox-ready-item "#{?#{==:#{@vbox-agent},busy},,#[range=window|#{window_index}]#{?#{==:#{@vbox-agent},wait},#[fg=#f9e2af] ! #I:#{=/14/…:window_name} ,#{?#{==:#{@vbox-agent},idle},#[fg=#a6e3a1] ○ #I:#{=/14/…:window_name} ,#[fg=#6c7086]   #I:#{=/14/…:window_name} }}#[default]#[norange]}"
-set -g @vbox-ready-cur  "#{?#{==:#{@vbox-agent},busy},,#[range=window|#{window_index}]#[list=focus]#[bg=#45475a]#[fg=#89b4fa]#[bold] ▸ #I:#{=/14/…:window_name} #[default]#[norange]#[list=on]}"
+set -g @vbox-ready-item "#{?#{==:#{@vbox-agent},busy},,#[range=window|#{window_index}]#{?#{==:#{@vbox-agent},wait},#[fg=#f9e2af] ! #I:#{=14:window_name} ,#{?#{==:#{@vbox-agent},idle},#[fg=#a6e3a1] ○ #I:#{=14:window_name} ,#[fg=#6c7086]   #I:#{=14:window_name} }}#[default]#[norange]}"
+set -g @vbox-ready-cur  "#{?#{==:#{@vbox-agent},busy},,#[range=window|#{window_index}]#[list=focus]#[bg=#45475a]#[fg=#89b4fa]#[bold] ▸ #I:#{=14:window_name} #[default]#[norange]#[list=on]}"
 
 # BUSY row items — agent currently working.
-set -g @vbox-busy-item "#{?#{==:#{@vbox-agent},busy},#[range=window|#{window_index}]#[fg=#fab387] ● #I:#{=/14/…:window_name} #[default]#[norange],}"
-set -g @vbox-busy-cur  "#{?#{==:#{@vbox-agent},busy},#[range=window|#{window_index}]#[list=focus]#[bg=#45475a]#[fg=#fab387]#[bold] ▸ ● #I:#{=/14/…:window_name} #[default]#[norange]#[list=on],}"
+set -g @vbox-busy-item "#{?#{==:#{@vbox-agent},busy},#[range=window|#{window_index}]#[fg=#fab387] ● #I:#{=14:window_name} #[default]#[norange],}"
+set -g @vbox-busy-cur  "#{?#{==:#{@vbox-agent},busy},#[range=window|#{window_index}]#[list=focus]#[bg=#45475a]#[fg=#fab387]#[bold] ▸ ● #I:#{=14:window_name} #[default]#[norange]#[list=on],}"
 
 # Row templates. #{W:normal,current} loops the window list and picks the
 # second format for the current window, so neither item format has to
