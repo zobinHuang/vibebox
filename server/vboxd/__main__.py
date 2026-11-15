@@ -6,7 +6,7 @@ from vboxd import VBOXD_VERSION
 from vboxd.config import ServerConfig
 from vboxd.errors import ConfigError, VboxdError
 from vboxd.http import VboxdServer
-from vboxd.store import SessionStore
+from vboxd.store import SessionQuery, SessionStore
 
 
 class ServerCli:
@@ -98,9 +98,9 @@ class ServerCli:
             the process exit status
         """
         config = ServerConfig.from_file(self._path_config)
-        list_meta = SessionStore(config.data_root).list_sessions(limit)
+        page = SessionStore(config.data_root).query(SessionQuery(limit=limit))
         json.dump(
-            [meta.as_payload() for meta in list_meta],
+            [meta.as_payload() for meta in page.list_sessions],
             sys.stdout,
             indent=2,
         )
@@ -127,7 +127,7 @@ def main(list_argv: list[str] | None = None) -> int:
     parser_list.add_argument(
         "--limit",
         type=int,
-        default=SessionStore.STORE_LIST_DEFAULT_LIMIT,
+        default=SessionQuery.QUERY_DEFAULT_LIMIT,
     )
 
     args = parser.parse_args(list_argv)

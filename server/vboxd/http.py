@@ -14,7 +14,7 @@ from vboxd.errors import (
     ValidationError,
     VboxdError,
 )
-from vboxd.store import SessionMeta, SessionStore
+from vboxd.store import SessionMeta, SessionQuery, SessionStore
 
 
 class VboxdRequestHandler(BaseHTTPRequestHandler):
@@ -22,7 +22,6 @@ class VboxdRequestHandler(BaseHTTPRequestHandler):
 
     HANDLER_API_PREFIX = "v1"
     HANDLER_BEARER_PREFIX = "Bearer "
-    HANDLER_LIST_MAX_LIMIT = 1000
 
     server_version = f"vboxd/{VBOXD_VERSION}"
     protocol_version = "HTTP/1.1"
@@ -89,7 +88,28 @@ class VboxdRequestHandler(BaseHTTPRequestHandler):
         self._authenticate()
 
         if list_segments == ["sessions"] and method == "GET":
-            self._handle_list(map_query)
+            self._handle_query(map_query)
+            return
+
+        if list_segments == ["machines"] and method == "GET":
+            self._respond_json(
+                HTTPStatus.OK,
+                {"machines": [s.as_payload() for s in self._store().list_machines()]},
+            )
+            return
+
+        if list_segments == ["accounts"] and method == "GET":
+            self._respond_json(
+                HTTPStatus.OK,
+                {"accounts": [s.as_payload() for s in self._store().list_accounts()]},
+            )
+            return
+
+        if len(list_segments) == 2 and list_segments[0] == "sessions" and method == "GET":
+            self._respond_json(
+                HTTPStatus.OK,
+                self._store().meta_of(list_segments[1]).as_payload(),
+            )
             return
 
         if len(list_segments) == 3 and list_segments[0] == "sessions":
@@ -103,6 +123,9 @@ class VboxdRequestHandler(BaseHTTPRequestHandler):
                 return
             if action == "close" and method == "POST":
                 self._handle_close(session_id)
+                return
+            if action == "transcript" and method == "GET":
+                self._handle_transcript(session_id, map_query)
                 return
 
         raise NotFoundError(f"no such route: {method} /{self.HANDLER_API_PREFIX}/"
@@ -142,17 +165,72 @@ class VboxdRequestHandler(BaseHTTPRequestHandler):
             },
         )
 
-    def _handle_list(self, map_query: dict[str, list[str]]) -> None:
-        limit = SessionStore.STORE_LIST_DEFAULT_LIMIT
-        if "limit" in map_query:
-            limit = self._query_int(map_query, "limit")
-        if limit < 1 or limit > self.HANDLER_LIST_MAX_LIMIT:
-            raise ValidationError(f"limit out of range: {limit}")
-        list_meta = self._store().list_sessions(limit)
+    def _handle_query(self, map_query: dict[str, list[str]]) -> None:
         self._respond_json(
             HTTPStatus.OK,
-            {"sessions": [meta.as_payload() for meta in list_meta]},
+            self._store().query(self._build_query(map_query)).as_payload(),
         )
+
+    def _build_query(self, map_query: dict[str, list[str]]) -> SessionQuery:
+        limit = SessionQuery.QUERY_DEFAULT_LIMIT
+        if "limit" in map_query:
+            limit = self._query_int(map_query, "limit")
+        if limit < 1 or limit > SessionQuery.QUERY_MAX_LIMIT:
+            raise ValidationError(f"limit out of range: {limit}")
+
+        agent = self._query_text(map_query, "agent")
+        if agent and agent not in SessionMeta.SESSION_AGENTS:
+            raise ValidationError(f"unknown agent: {agent!r}")
+        status = self._query_text(map_query, "status")
+        if status and status not in SessionQuery.QUERY_STATUSES:
+            raise ValidationError(f"unknown status: {status!r}")
+        time_field = self._query_text(map_query, "time") or "updated_at"
+        if not time_field.endswith("_at"):
+            time_field = f"{time_field}_at"
+        if time_field not in SessionQuery.QUERY_TIME_FIELDS:
+            raise ValidationError(f"unknown time field: {time_field!r}")
+
+        since = self._query_text(map_query, "since")
+        until = self._query_text(map_query, "until")
+        return SessionQuery(
+            agent=agent,
+            account=self._query_text(map_query, "account"),
+            hostname=self._query_text(map_query, "hostname"),
+            project=self._query_text(map_query, "project"),
+            branch=self._query_text(map_query, "branch"),
+            status=status,
+            since=SessionQuery.parse_timestamp(since) if since else None,
+            until=SessionQuery.parse_timestamp(until) if until else None,
+            time_field=time_field,
+            limit=limit,
+            cursor=self._query_text(map_query, "cursor"),
+        )
+
+    def _handle_transcript(
+        self,
+        session_id: str,
+        map_query: dict[str, list[str]],
+    ) -> None:
+        offset = 0
+        if "offset" in map_query:
+            offset = self._query_int(map_query, "offset")
+        limit = None
+        if "limit" in map_query:
+            limit = self._query_int(map_query, "limit")
+            if limit < 1:
+                raise ValidationError(f"limit out of range: {limit}")
+        chunk = self._store().read_transcript(
+            session_id=session_id,
+            offset=offset,
+            limit=limit,
+        )
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/x-ndjson")
+        self.send_header("Content-Length", str(len(chunk.data)))
+        self.send_header("X-Vbox-Offset", str(chunk.offset))
+        self.send_header("X-Vbox-Total", str(chunk.total))
+        self.end_headers()
+        self.wfile.write(chunk.data)
 
     def _authenticate(self) -> None:
         header = self.headers.get("Authorization", "")
@@ -206,6 +284,12 @@ class VboxdRequestHandler(BaseHTTPRequestHandler):
             raise ValidationError(
                 f"query parameter {name} is not an integer: {list_values[0]!r}"
             ) from err
+
+    def _query_text(self, map_query: dict[str, list[str]], name: str) -> str | None:
+        list_values = map_query.get(name) or []
+        if not list_values:
+            return None
+        return list_values[0].strip() or None
 
     def _query_flag(self, map_query: dict[str, list[str]], name: str) -> bool:
         list_values = map_query.get(name) or []

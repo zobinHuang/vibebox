@@ -227,10 +227,173 @@ class HttpApiTest(unittest.TestCase):
         list_sessions = map_body["sessions"]
         self.assertEqual(len(list_sessions), 2)
         self.assertEqual(list_sessions[0]["account"]["uuid"], "acct-1")
+        self.assertEqual(map_body["total_matched"], 2)
+        self.assertIsNone(map_body["next_cursor"])
 
     def test_listing_rejects_an_out_of_range_limit(self) -> None:
         status, _ = self.request("GET", "/v1/sessions?limit=0")
         self.assertEqual(status, 400)
+
+    def seed(self, session_id: str, **overrides: object) -> None:
+        map_body = dict(self.TEST_BEGIN_BODY)
+        map_body.update(overrides)
+        status, _ = self.request(
+            "POST",
+            f"/v1/sessions/{session_id}/begin",
+            json.dumps(map_body).encode("utf-8"),
+        )
+        self.assertEqual(status, 200)
+
+    def ids_for(self, query: str) -> list[str]:
+        status, map_body = self.request("GET", f"/v1/sessions?{query}")
+        self.assertEqual(status, 200)
+        return [meta["session_id"] for meta in map_body["sessions"]]
+
+    def seed_fleet(self) -> None:
+        self.seed(
+            "mac-claude",
+            agent="claude",
+            machine={"hostname": "laptop", "fqdn": "laptop.lan", "os": "Darwin"},
+            cwd="/home/dev/vibebox",
+            git_branch="main",
+        )
+        self.seed(
+            "box-claude",
+            agent="claude",
+            account={"uuid": "acct-2", "email": "other@example.com"},
+            machine={"hostname": "buildbox", "fqdn": "buildbox.lan", "os": "Linux"},
+            cwd="/srv/other",
+            git_branch="wip",
+        )
+        self.seed(
+            "box-codex",
+            agent="codex",
+            machine={"hostname": "buildbox", "fqdn": "buildbox.lan", "os": "Linux"},
+            cwd="/srv/other",
+        )
+
+    def test_filter_by_agent(self) -> None:
+        self.seed_fleet()
+        self.assertEqual(self.ids_for("agent=codex"), ["box-codex"])
+        self.assertEqual(sorted(self.ids_for("agent=claude")), ["box-claude", "mac-claude"])
+
+    def test_filter_by_hostname_accepts_short_name_or_fqdn(self) -> None:
+        self.seed_fleet()
+        self.assertEqual(sorted(self.ids_for("hostname=buildbox")), ["box-claude", "box-codex"])
+        self.assertEqual(sorted(self.ids_for("hostname=buildbox.lan")), ["box-claude", "box-codex"])
+        self.assertEqual(self.ids_for("hostname=laptop"), ["mac-claude"])
+
+    def test_filter_by_account_and_branch(self) -> None:
+        self.seed_fleet()
+        self.assertEqual(self.ids_for("account=acct-2"), ["box-claude"])
+        self.assertEqual(self.ids_for("branch=wip"), ["box-claude"])
+
+    def test_filter_by_project_is_a_substring_of_cwd(self) -> None:
+        self.seed_fleet()
+        self.assertEqual(self.ids_for("project=vibebox"), ["mac-claude"])
+        self.assertEqual(sorted(self.ids_for("project=/srv")), ["box-claude", "box-codex"])
+
+    def test_filters_combine(self) -> None:
+        self.seed_fleet()
+        self.assertEqual(self.ids_for("hostname=buildbox&agent=claude"), ["box-claude"])
+
+    def test_filter_by_status(self) -> None:
+        self.seed_fleet()
+        self.request("POST", "/v1/sessions/box-codex/close", b"{}")
+        self.assertEqual(self.ids_for("status=closed"), ["box-codex"])
+        self.assertEqual(sorted(self.ids_for("status=open")), ["box-claude", "mac-claude"])
+
+    def test_filter_by_time_window(self) -> None:
+        self.seed_fleet()
+        self.assertEqual(len(self.ids_for("since=1970-01-01T00:00:00Z")), 3)
+        self.assertEqual(len(self.ids_for("since=0")), 3)
+        self.assertEqual(len(self.ids_for("until=1970-01-01T00:00:00Z")), 0)
+        self.assertEqual(len(self.ids_for("since=2099-01-01T00:00:00Z")), 0)
+
+    def test_unusable_filters_are_rejected(self) -> None:
+        for query in ("agent=cursor", "status=sleeping", "since=yesterday",
+                      "time=nonsense", "cursor=!!!!", "limit=99999"):
+            with self.subTest(query=query):
+                status, _ = self.request("GET", f"/v1/sessions?{query}")
+                self.assertEqual(status, 400)
+
+    def test_cursor_walks_every_session_exactly_once(self) -> None:
+        for index in range(7):
+            self.seed(f"s-{index}")
+        list_seen: list[str] = []
+        query = "limit=3"
+        while True:
+            status, map_body = self.request("GET", f"/v1/sessions?{query}")
+            self.assertEqual(status, 200)
+            list_seen.extend(meta["session_id"] for meta in map_body["sessions"])
+            if not map_body["next_cursor"]:
+                break
+            query = f"limit=3&cursor={map_body['next_cursor']}"
+        self.assertEqual(sorted(list_seen), [f"s-{index}" for index in range(7)])
+        self.assertEqual(len(set(list_seen)), 7)
+
+    def test_single_session_metadata(self) -> None:
+        self.seed_fleet()
+        status, map_body = self.request("GET", "/v1/sessions/mac-claude")
+        self.assertEqual(status, 200)
+        self.assertEqual(map_body["machine"]["hostname"], "laptop")
+        self.assertEqual(map_body["machine"]["os"], "Darwin")
+        status, _ = self.request("GET", "/v1/sessions/nope")
+        self.assertEqual(status, 404)
+
+    def test_transcript_download_whole_and_from_an_offset(self) -> None:
+        self.begin()
+        chunk = b'{"a":1}\n{"b":2}\n'
+        self.request("PUT", "/v1/sessions/s-1/data?offset=0", chunk)
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        try:
+            connection.request(
+                "GET",
+                "/v1/sessions/s-1/transcript",
+                headers={"Authorization": f"Bearer {self.TEST_TOKEN}"},
+            )
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.getheader("Content-Type"), "application/x-ndjson")
+            self.assertEqual(response.getheader("X-Vbox-Total"), str(len(chunk)))
+            self.assertEqual(response.read(), chunk)
+        finally:
+            connection.close()
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        try:
+            connection.request(
+                "GET",
+                "/v1/sessions/s-1/transcript?offset=8",
+                headers={"Authorization": f"Bearer {self.TEST_TOKEN}"},
+            )
+            response = connection.getresponse()
+            self.assertEqual(response.read(), b'{"b":2}\n')
+        finally:
+            connection.close()
+
+    def test_machines_and_accounts_summarise_the_fleet(self) -> None:
+        self.seed_fleet()
+        status, map_body = self.request("GET", "/v1/machines")
+        self.assertEqual(status, 200)
+        map_by_host = {m["hostname"]: m for m in map_body["machines"]}
+        self.assertEqual(map_by_host["buildbox"]["session_count"], 2)
+        self.assertEqual(map_by_host["buildbox"]["os"], "Linux")
+        self.assertEqual(map_by_host["laptop"]["session_count"], 1)
+        status, map_body = self.request("GET", "/v1/accounts")
+        self.assertEqual(status, 200)
+        set_pairs = {(a["agent"], a["uuid"]) for a in map_body["accounts"]}
+        self.assertEqual(
+            set_pairs,
+            {("claude", "acct-1"), ("claude", "acct-2"), ("codex", "acct-1")},
+        )
+
+    def test_reads_need_a_token(self) -> None:
+        self.begin()
+        for path in ("/v1/sessions/s-1", "/v1/sessions/s-1/transcript",
+                     "/v1/machines", "/v1/accounts"):
+            with self.subTest(path=path):
+                status, _ = self.request("GET", path, token=None)
+                self.assertEqual(status, 401)
 
 
 if __name__ == "__main__":

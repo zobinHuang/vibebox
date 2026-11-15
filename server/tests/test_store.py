@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from vboxd.errors import CursorConflictError, NotFoundError, ValidationError
-from vboxd.store import AgentAccount, SessionMeta, SessionStore
+from vboxd.store import AgentAccount, SessionMeta, SessionQuery, SessionStore
 
 
 def make_meta(
@@ -137,13 +137,47 @@ class SessionStoreTest(unittest.TestCase):
         set_account_dirs = {path.name for path in (self.root / "claude").iterdir()}
         self.assertEqual(set_account_dirs, {"acct-a", "acct-b"})
 
-    def test_list_sessions_is_newest_first(self) -> None:
+    def restamp(self, session_id: str, updated_at: str) -> None:
+        """Force one stored session's update time, so ordering tests never race
+        the clock: several writes can land inside the same millisecond."""
+        path_meta = (
+            self.root
+            / make_meta(session_id=session_id).relative_directory()
+            / SessionStore.STORE_META_NAME
+        )
+        map_payload = json.loads(path_meta.read_text())
+        map_payload["updated_at"] = updated_at
+        path_meta.write_text(json.dumps(map_payload))
+
+    def test_query_is_newest_first(self) -> None:
         self.store.begin(make_meta(session_id="s-a"))
         self.store.begin(make_meta(session_id="s-b"))
-        self.store.append("s-a", 0, b"x\n", do_reset=False)
-        list_ids = [meta.session_id for meta in self.store.list_sessions()]
-        self.assertEqual(list_ids[0], "s-a")
-        self.assertEqual(sorted(list_ids), ["s-a", "s-b"])
+        self.restamp("s-a", "2026-11-16T10:00:00.000+00:00")
+        self.restamp("s-b", "2026-11-16T09:00:00.000+00:00")
+        list_ids = [m.session_id for m in self.store.query(SessionQuery()).list_sessions]
+        self.assertEqual(list_ids, ["s-a", "s-b"])
+
+    def test_equal_timestamps_break_on_session_id(self) -> None:
+        for session_id in ("s-a", "s-b", "s-c"):
+            self.store.begin(make_meta(session_id=session_id))
+            self.restamp(session_id, "2026-11-16T10:00:00.000+00:00")
+        list_ids = [m.session_id for m in self.store.query(SessionQuery()).list_sessions]
+        self.assertEqual(list_ids, ["s-c", "s-b", "s-a"])
+
+    def test_paging_through_equal_timestamps_loses_nothing(self) -> None:
+        for index in range(6):
+            self.store.begin(make_meta(session_id=f"s-{index}"))
+            self.restamp(f"s-{index}", "2026-11-16T10:00:00.000+00:00")
+        list_seen: list[str] = []
+        cursor = None
+        while True:
+            page = self.store.query(SessionQuery(limit=2, cursor=cursor))
+            list_seen.extend(meta.session_id for meta in page.list_sessions)
+            cursor = page.next_cursor
+            if not cursor:
+                break
+        self.assertEqual(sorted(list_seen), [f"s-{index}" for index in range(6)])
+        self.assertEqual(len(set(list_seen)), 6)
 
     def test_stored_files_are_owner_only(self) -> None:
         self.store.begin(make_meta())
