@@ -355,19 +355,22 @@ class SkillRecord:
             return None
         return self.list_versions[-1]
 
-    def version_for(self, pin: str) -> SkillVersion | None:
-        """Find a recorded version by its commit or by the ref that produced it.
+    def version_for(self, commit: str) -> SkillVersion | None:
+        """Find a recorded version by its commit.
+
+        Only a commit is matched here, never a ref. A ref is a pointer that
+        moves, so resolving one against whatever this index happens to have
+        recorded would make the same pin mean different things on different
+        servers; a ref always goes back to the repository instead.
 
         Args:
-            pin: a commit, written in full or abbreviated, or a ref name
+            commit: a commit, written in full or abbreviated
 
         Returns:
             the matching version, newest first, or None if none matches
         """
         for version in reversed(self.list_versions):
-            if version.commit == pin or version.commit.startswith(pin):
-                return version
-            if version.ref == pin:
+            if version.commit == commit or version.commit.startswith(commit):
                 return version
         return None
 
@@ -601,9 +604,10 @@ class SkillIndex:
     def resolve_version(self, record_id: str, pin: str) -> tuple[SkillRecord, SkillVersion]:
         """Decide which commit of a skill a pin names, asking the repository if needed.
 
-        A pin of `latest` re-resolves the tracked branch, so installing always
-        picks up what upstream has now. Any other pin is served from the recorded
-        versions first, and only then from the repository.
+        `latest` re-resolves the tracked branch, so installing always picks up
+        what upstream has now. A commit is immutable and is answered from the
+        recorded versions when they hold it. A ref is a pointer that moves, so it
+        is always re-resolved against the repository.
 
         Args:
             record_id: the skill to resolve
@@ -626,9 +630,10 @@ class SkillIndex:
                         stored.updated_at = GitRefResolver.now_timestamp()
                         self._store.write(record_id, stored.as_payload())
             return record, version
-        recorded = record.version_for(pin)
-        if recorded is not None:
-            return record, recorded
+        if SkillSource.SOURCE_COMMIT_PATTERN.match(pin):
+            recorded = record.version_for(pin)
+            if recorded is not None:
+                return record, recorded
         return record, self._resolver.resolve(record.repo_url, pin)
 
     def _source_from(self, map_body: dict[str, object]) -> SkillSource:

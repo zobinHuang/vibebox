@@ -49,6 +49,12 @@ class PayloadTooLargeError(VboxdError):
     ERROR_HTTP_STATUS = 413
 
 
+class ConflictError(VboxdError):
+    """The request would overwrite something that already exists."""
+
+    ERROR_HTTP_STATUS = 409
+
+
 class CursorConflictError(VboxdError):
     """The client's write offset disagrees with the stored transcript."""
 
