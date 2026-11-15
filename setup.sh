@@ -144,8 +144,12 @@ bind -T tab_mode c run-shell -b "$HOME/.local/bin/vbox-agent clear #{window_id}"
 # told on its next turn, by the UserPromptSubmit hook. display-popup needs
 # tmux 3.2, and a client attached to draw on — which is the case whenever
 # you are there to press the key.
+# run-shell, not display-popup directly: display-popup passes #{...} to
+# the shell unexpanded, so the picker would be handed the literal text
+# instead of this pane and its directory. run-shell does expand them, and
+# -b keeps the server from blocking while the popup is up.
 if-shell "tmux -V | awk '{if($2+0 >= 3.2) exit 0; else exit 1}'" \
-  "bind -T tab_mode p display-popup -w 76 -h 18 -E \"$HOME/.local/bin/vbox-playbook pick --pane '#{pane_id}' --project '#{pane_current_path}'\"" \
+  "bind -T tab_mode p run-shell -b \"$HOME/.local/bin/vbox-playbook pick-here '#{pane_id}' '#{pane_current_path}'\"" \
   "bind -T tab_mode p display-message 'playbooks need tmux 3.2 or newer'"
 bind -T tab_mode Left previous-window
 bind -T tab_mode Right next-window

@@ -54,6 +54,7 @@ Usage:
   vbox-playbook current [--pane <%n>]
   vbox-playbook resolve <playbook-id>
   vbox-playbook pick [--pane <%n>] [--agent <a>] [--project <dir>] [--done <file>]
+  vbox-playbook pick-here <pane-id> <dir>   raise the picker over a pane
   vbox-playbook session-start <agent>   hook entry point; payload on stdin
   vbox-playbook context <agent>         hook entry point; payload on stdin
 EOF
@@ -532,6 +533,23 @@ json_escape_multiline() {
     awk 'NR > 1 { printf "\\n" } { printf "%s", $0 }'
 }
 
+# ─── raise the picker over a pane ─────────────────────────────────────
+# Bound to a key through `run-shell`, which does expand formats — unlike
+# display-popup, which passes #{...} through to the shell untouched and
+# would have the picker install into a directory literally named
+# "#{pane_current_path}".
+cmd_pick_here() {
+  [ $# -ge 1 ] || usage
+  _ph_pane="$1"
+  _ph_project="${2:-}"
+  [ -n "$_ph_project" ] ||
+    _ph_project="$(tmux display-message -p -t "$_ph_pane" '#{pane_current_path}' 2>/dev/null)"
+  [ -n "$_ph_project" ] || _ph_project="$PWD"
+  tmux display-popup -t "$_ph_pane" -w 76 -h 18 -E \
+    "$VBOX_SELF pick --pane '$_ph_pane' --project '$_ph_project'" 2>>"$VBOX_LOG"
+  exit 0
+}
+
 # ─── the picker, run inside a tmux popup ──────────────────────────────
 cmd_pick() {
   _pk_pane=""
@@ -705,6 +723,7 @@ case "$CMD" in
   current)    cmd_current "$@" ;;
   resolve)    cmd_resolve "$@" ;;
   pick)          cmd_pick "$@" ;;
+  pick-here)     cmd_pick_here "$@" ;;
   session-start) cmd_session_start "$@" ;;
   context)       cmd_context "$@" ;;
   -h|--help)  usage ;;
