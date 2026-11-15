@@ -26,6 +26,32 @@ vbox disconnect
 Changing an agent's hook config invalidates the trust hash codex keeps for it, so
 run `/hooks` in codex once after connecting or disconnecting.
 
+## Switching uploads on under a running vbox
+
+Connecting, or re-running the installer, works on a box with agents already
+running in its panes. Those sessions have nothing on the server yet, and their
+hooks alone would not push anything until you next typed — so `vbox connect` and
+the installer both push whatever is already under way, transcript and all.
+
+```bash
+# push the sessions already under way; connect and the installer do this for you
+vbox-session adopt
+
+# widen or narrow which transcripts count as under way (default: last 4 hours)
+vbox-session adopt --since-minutes 60
+
+# upload every transcript still on this machine, however old
+vbox-session adopt --all
+```
+
+A session is judged to be under way by how recently its transcript was written,
+because neither agent offers anything better: there is no reliable way back from
+a running process to its session id. A session you have had open and idle since
+this morning still counts, and one that just ended is picked up too.
+
+Without a `vbox connect`, none of this does anything at all — no files, no hooks,
+no requests.
+
 ## What is uploaded
 
 | Agent | Transcript | Account identity |
