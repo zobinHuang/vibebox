@@ -1,9 +1,9 @@
 # vboxd
 
-The server side of VibeBox session history. It accepts the JSON transcripts that
-Claude Code and codex write while you work and stores them on disk, split by
-agent and by the account that was logged in. It is Python standard library only
-— no virtualenv, no packages to install.
+The server side of VibeBox. It stores the JSON transcripts that Claude Code and
+codex write while you work, split by agent and by the account that was logged in,
+and it keeps an index of the skills and playbooks your agents load. It is Python
+standard library only — no virtualenv, no packages to install.
 
 ## Usage
 

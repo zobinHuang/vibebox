@@ -158,6 +158,122 @@ The two lists a UI needs to build its filters, busiest first.
 }
 ```
 
+## Skills
+
+vboxd keeps an index of skills, never their files: an entry records which git
+repository a skill lives in, which path inside it, and which commits its refs
+have pointed at. A client fetches the files itself from the repository.
+
+| | |
+|---|---|
+| `GET /v1/skills` | the index, filtered by `q` (name, description or id) and `repo` |
+| `POST /v1/skills` | add a skill, or refresh the entry that already names it |
+| `GET /v1/skills/<id>` | one entry |
+| `PATCH /v1/skills/<id>` | change `name`, `description` or `default_ref` |
+| `DELETE /v1/skills/<id>` | remove the entry |
+| `GET /v1/skills/<id>/versions` | every commit this server has seen on the tracked ref |
+| `POST /v1/skills/<id>/refresh` | re-resolve the tracked ref and record what upstream has now |
+
+`POST` takes either a `source` spec or the fields spelled out:
+
+```bash
+# owner/repo, a path inside it after @, and a ref after #
+curl -sH "Authorization: Bearer $TOKEN" "$BASE/v1/skills" \
+  -d '{"source": "anthropics/skills@frontend-design#main",
+       "description": "house frontend conventions"}'
+
+# the same, spelled out; any https, ssh or scp-style git URL works
+curl -sH "Authorization: Bearer $TOKEN" "$BASE/v1/skills" \
+  -d '{"repo_url": "https://gitlab.com/team/skills",
+       "skill_path": "review/security", "ref": "v2"}'
+```
+
+A skill's id is derived from its host, repository and path — never from its ref —
+so registering the same skill at another version updates one entry rather than
+creating a second. Registering resolves the ref to a commit straight away, with
+`git ls-remote`, so an entry is never stored without a usable version.
+
+`name` and `description` are whatever the registering client supplies; vboxd does
+not read `SKILL.md`, because it does not fetch skill files at all. Without them,
+`name` falls back to the last path segment.
+
+Only repositories vboxd is willing to contact are accepted: `https`, `http`,
+`ssh` and scp-style URLs, plus the `owner/repo` shorthand. Local paths and the
+`ext::` and `file::` transports are refused, and a `..` segment in a skill path
+is refused — the client turns that path into a checkout directory.
+
+## Playbooks
+
+A playbook is a named set of skills, drawn from as many repositories as you like,
+plus the standing instructions that go with them. It too is an index: it stores
+pins, not files.
+
+| | |
+|---|---|
+| `GET /v1/playbooks` | the index, filtered by `q` |
+| `POST /v1/playbooks` | create one |
+| `GET /v1/playbooks/<id>` | one playbook |
+| `PATCH /v1/playbooks/<id>` | change `name`, `description`, `prompt` or `skills` |
+| `DELETE /v1/playbooks/<id>` | remove it |
+| `GET /v1/playbooks/<id>/resolve` | ★ every skill pinned to a commit, ready to install |
+
+```bash
+curl -sH "Authorization: Bearer $TOKEN" "$BASE/v1/playbooks" \
+  -d '{"name": "Backend review",
+       "description": "what to load when reviewing the backend",
+       "prompt": "Follow the loaded conventions exactly; they override local habit.",
+       "skills": ["github-com-anthropics-skills-frontend-design",
+                  {"skill_id": "gitlab-com-team-skills-review-security", "pin": "v2"}]}'
+```
+
+A skill entry is either a bare id, which tracks the latest version, or an object
+with a `pin`. A `PATCH` changes only the fields it carries, so sending `skills`
+replaces the list while leaving the prompt alone.
+
+### What a pin means
+
+| Pin | |
+|---|---|
+| `latest` (the default) | re-resolved against the tracked ref every time the playbook is resolved |
+| a branch or tag | re-resolved against the repository every time, because a ref is a pointer that moves |
+| a commit | never moves, and is answered without contacting the repository once it has been recorded |
+
+### `GET /v1/playbooks/<id>/resolve`
+
+This is the endpoint a client installs from. It turns every pin into a concrete
+commit at this moment and returns, in one response, the prompt and everything
+needed to fetch each skill.
+
+```json
+{
+  "id": "backend-review",
+  "name": "Backend review",
+  "description": "what to load when reviewing the backend",
+  "prompt": "Follow the loaded conventions exactly; they override local habit.",
+  "skills": [
+    {
+      "skill_id": "github-com-anthropics-skills-frontend-design",
+      "name": "frontend-design",
+      "description": "house frontend conventions",
+      "repo_url": "https://github.com/anthropics/skills",
+      "skill_path": "frontend-design",
+      "ref": "main",
+      "commit": "e1c9489ca95b5fc960acc4809dfb84613bdf24fd",
+      "pin": "latest"
+    }
+  ],
+  "unresolved": [],
+  "resolved_at": "2026-11-16T09:42:10.004+00:00"
+}
+```
+
+There is no background polling: upstream is consulted exactly when a playbook is
+resolved, which is when a client is about to install it.
+
+A skill that has since been removed from the index, or whose repository cannot be
+reached, lands in `unresolved` with the reason instead of failing the whole
+playbook — a client installs what it can and shows the rest.
+
 ## Writing
 
 A client that uploads transcripts uses these. They are documented for
