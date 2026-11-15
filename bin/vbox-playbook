@@ -30,6 +30,9 @@ VBOX_AGENTS='claude codex gemini'
 VBOX_HTTP_TIMEOUT=60
 VBOX_GIT_TIMEOUT=120
 VBOX_LOG_MAX_LINES=2000
+VBOX_PICK_WAIT_SECONDS=30
+VBOX_PICK_NONE='-'
+VBOX_SELF="$HOME/.local/bin/vbox-playbook"
 
 usage() {
   cat >&2 <<'EOF'
@@ -39,6 +42,9 @@ Usage:
   vbox-playbook uninstall [--agent <a>] [--project <dir>] [--pane <%n>]
   vbox-playbook current [--pane <%n>]
   vbox-playbook resolve <playbook-id>
+  vbox-playbook pick [--pane <%n>] [--agent <a>] [--project <dir>] [--done <file>]
+  vbox-playbook session-start <agent>   hook entry point; payload on stdin
+  vbox-playbook context <agent>         hook entry point; payload on stdin
 EOF
   exit 1
 }
@@ -475,6 +481,209 @@ trim_log() {
   mv "$VBOX_LOG.trim" "$VBOX_LOG" 2>/dev/null || true
 }
 
+# ─── the standing instructions a loaded playbook contributes ──────────
+# Built from the copy of the server's resolution that install cached, so
+# injecting costs nothing and works with the server unreachable.
+#
+# The skill roster is spelled out with on-disk paths on purpose. The files
+# are in the directory the agent scans, but whether it re-reads that
+# directory after start-up is not something any of them promises, so the
+# text says what was loaded and where rather than relying on discovery.
+emit_context() {
+  # emit_context <event> <playbook-id> <agent> <project>
+  _ec_event="$1"; _ec_id="$2"; _ec_agent="$3"; _ec_project="$4"
+  _ec_file="$VBOX_RESOLVED_DIR/$_ec_id.json"
+  [ -f "$_ec_file" ] || return 1
+  _ec_rel="$(agent_skills_dir "$_ec_agent")" || return 1
+  _ec_name="$(json_scalar "$_ec_file" name)"
+  _ec_prompt="$(json_scalar "$_ec_file" prompt)"
+
+  _ec_text="Playbook \"${_ec_name:-$_ec_id}\" is loaded for this session."
+  [ -n "$_ec_prompt" ] && _ec_text="$_ec_text
+
+$_ec_prompt"
+  _ec_roster="$(json_rows "$_ec_file" skills name description |
+    awk -F'\t' '{ printf "- %s: %s\n", $1, ($2 == "" ? "no description" : $2) }')"
+  if [ -n "$_ec_roster" ]; then
+    _ec_text="$_ec_text
+
+Its skills are installed under $_ec_project/$_ec_rel and are available now:
+$_ec_roster"
+  fi
+  printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"%s"}}\n' \
+    "$_ec_event" "$(json_escape_multiline "$_ec_text")"
+  return 0
+}
+
+json_escape_multiline() {
+  printf '%s' "$1" |
+    sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/\\t/g' |
+    awk 'NR > 1 { printf "\\n" } { printf "%s", $0 }'
+}
+
+# ─── the picker, run inside a tmux popup ──────────────────────────────
+cmd_pick() {
+  _pk_pane=""
+  _pk_agent=""
+  _pk_project=""
+  _pk_done=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --pane)    _pk_pane="${2:-}"; shift 2 ;;
+      --agent)   _pk_agent="${2:-}"; shift 2 ;;
+      --project) _pk_project="${2:-}"; shift 2 ;;
+      --done)    _pk_done="${2:-}"; shift 2 ;;
+      *) die "unknown flag $1" ;;
+    esac
+  done
+  # Whatever happens from here, the caller waiting on us must be released.
+  [ -n "$_pk_done" ] && trap 'printf done > "$_pk_done" 2>/dev/null || true' EXIT HUP INT TERM
+  _pk_pane="${_pk_pane:-${TMUX_PANE:-}}"
+  [ -n "$_pk_project" ] || _pk_project="$PWD"
+
+  if ! json_tool >/dev/null; then
+    printf 'vbox-playbook needs jq or python3.\n'
+    pick_pause
+    exit 0
+  fi
+  if ! load_connection; then
+    printf 'Not connected to a session server.\n  vbox connect <host> <port> --token <token>\n'
+    pick_pause
+    exit 0
+  fi
+  _pk_work="$(mktemp -d "${TMPDIR:-/tmp}/vbox-pick.XXXXXX")" || exit 0
+  if ! api_get "/v1/playbooks" "$_pk_work/playbooks.json"; then
+    printf 'Server would not list playbooks (http %s).\n' "$VBOX_STATUS"
+    rm -rf "$_pk_work"
+    pick_pause
+    exit 0
+  fi
+  json_rows "$_pk_work/playbooks.json" playbooks id name description > "$_pk_work/rows.tsv"
+  if [ ! -s "$_pk_work/rows.tsv" ]; then
+    printf 'No playbooks on the server yet.\n'
+    rm -rf "$_pk_work"
+    pick_pause
+    exit 0
+  fi
+
+  printf '\n  Playbook for this %s session in %s\n\n' "${_pk_agent:-agent}" "$_pk_project"
+  _pk_n=0
+  while IFS='	' read -r _pk_id _pk_name _pk_desc; do
+    _pk_n=$((_pk_n + 1))
+    printf '    %2s) %-28s %s\n' "$_pk_n" "${_pk_name:-$_pk_id}" "$_pk_desc"
+  done < "$_pk_work/rows.tsv"
+  printf '    %2s) %s\n\n' 0 "none"
+  printf '  choose [0-%s]: ' "$_pk_n"
+  read -r _pk_choice || _pk_choice=0
+  case "$_pk_choice" in
+    ''|*[!0-9]*) _pk_choice=0 ;;
+  esac
+
+  if [ "$_pk_choice" -lt 1 ] || [ "$_pk_choice" -gt "$_pk_n" ]; then
+    # A pane that was offered the choice and declined must not be asked
+    # again every turn, so the refusal is recorded like any other answer.
+    [ -n "$_pk_pane" ] &&
+      tmux set-option -p -t "$_pk_pane" "$VBOX_PANE_OPT" "$VBOX_PICK_NONE" 2>/dev/null
+    rm -rf "$_pk_work"
+    exit 0
+  fi
+  _pk_pick="$(awk -F'	' -v n="$_pk_choice" 'NR == n { print $1 }' "$_pk_work/rows.tsv")"
+  rm -rf "$_pk_work"
+  [ -n "$_pk_pick" ] || exit 0
+
+  printf '\n  loading %s ...\n' "$_pk_pick"
+  set -- install "$_pk_pick" --project "$_pk_project"
+  [ -n "$_pk_agent" ] && set -- "$@" --agent "$_pk_agent"
+  [ -n "$_pk_pane" ] && set -- "$@" --pane "$_pk_pane"
+  "$0" "$@" || pick_pause
+  exit 0
+}
+
+pick_pause() {
+  # The popup closes the moment we exit, so an error nobody read is an
+  # error nobody can act on.
+  printf '\n  press enter to close '
+  read -r _ || true
+}
+
+# ─── hook entry points ────────────────────────────────────────────────
+cmd_session_start() {
+  _ss_agent="${1:-}"
+  agent_skills_dir "$_ss_agent" >/dev/null || exit 0
+  _ss_payload="$(mktemp "${TMPDIR:-/tmp}/vbox-hook.XXXXXX")" || exit 0
+  trap 'rm -f "$_ss_payload"' EXIT HUP INT TERM
+  cat > "$_ss_payload" 2>/dev/null || true
+  _ss_pane="${TMUX_PANE:-}"
+  # Outside tmux there is no pane to bind a playbook to, and no client to
+  # show a picker on; saying nothing is the whole of the right behaviour.
+  [ -n "$_ss_pane" ] || exit 0
+  [ -f "$VBOX_CONNECT_FILE" ] || exit 0
+  _ss_project="$(json_scalar "$_ss_payload" cwd)"
+  [ -n "$_ss_project" ] || _ss_project="$PWD"
+  _ss_project="$(project_root_of "$_ss_project")"
+
+  _ss_current="$(tmux display-message -p -t "$_ss_pane" "#{$VBOX_PANE_OPT}" 2>/dev/null)"
+  if [ -z "$_ss_current" ]; then
+    _ss_current="$(ask_pane "$_ss_pane" "$_ss_agent" "$_ss_project")"
+  fi
+  case "$_ss_current" in
+    ''|"$VBOX_PICK_NONE") exit 0 ;;
+  esac
+  emit_context SessionStart "$_ss_current" "$_ss_agent" "$_ss_project" || exit 0
+  tmux set-option -p -t "$_ss_pane" "$VBOX_INJECTED_OPT" "$_ss_current" 2>/dev/null || true
+  exit 0
+}
+
+# ─── put the picker on screen and wait for an answer ──────────────────
+# display-popup needs a client attached to the session and does not block
+# its caller, so the answer is waited for rather than returned: the picker
+# records it in the pane option and drops a file when it is finished,
+# either way. With no client attached the popup cannot be drawn at all,
+# and the session simply starts without a playbook.
+ask_pane() {
+  # ask_pane <pane> <agent> <project>
+  _ap_pane="$1"; _ap_agent="$2"; _ap_project="$3"
+  command -v tmux >/dev/null 2>&1 || return 0
+  _ap_done="$(mktemp "${TMPDIR:-/tmp}/vbox-pick-done.XXXXXX")" || return 0
+  rm -f "$_ap_done"
+  if ! tmux display-popup -t "$_ap_pane" -w 76 -h 18 -E         "$VBOX_SELF pick --pane $_ap_pane --agent $_ap_agent --project '$_ap_project' --done $_ap_done"         2>>"$VBOX_LOG"; then
+    log "could not show the playbook picker on $_ap_pane"
+    rm -f "$_ap_done"
+    return 0
+  fi
+  _ap_waited=0
+  while [ ! -f "$_ap_done" ] && [ "$_ap_waited" -lt "$VBOX_PICK_WAIT_SECONDS" ]; do
+    sleep 1
+    _ap_waited=$((_ap_waited + 1))
+  done
+  rm -f "$_ap_done"
+  tmux display-message -p -t "$_ap_pane" "#{$VBOX_PANE_OPT}" 2>/dev/null
+}
+
+cmd_context() {
+  _cx_agent="${1:-}"
+  agent_skills_dir "$_cx_agent" >/dev/null || exit 0
+  _cx_payload="$(mktemp "${TMPDIR:-/tmp}/vbox-hook.XXXXXX")" || exit 0
+  trap 'rm -f "$_cx_payload"' EXIT HUP INT TERM
+  cat > "$_cx_payload" 2>/dev/null || true
+  _cx_pane="${TMUX_PANE:-}"
+  [ -n "$_cx_pane" ] || exit 0
+  _cx_current="$(tmux display-message -p -t "$_cx_pane" "#{$VBOX_PANE_OPT}" 2>/dev/null)"
+  case "$_cx_current" in
+    ''|"$VBOX_PICK_NONE") exit 0 ;;
+  esac
+  _cx_injected="$(tmux display-message -p -t "$_cx_pane" "#{$VBOX_INJECTED_OPT}" 2>/dev/null)"
+  # Already told this session about this playbook; repeating it every turn
+  # would spend context on something it has not forgotten.
+  [ "$_cx_current" = "$_cx_injected" ] && exit 0
+  _cx_project="$(json_scalar "$_cx_payload" cwd)"
+  [ -n "$_cx_project" ] || _cx_project="$PWD"
+  _cx_project="$(project_root_of "$_cx_project")"
+  emit_context UserPromptSubmit "$_cx_current" "$_cx_agent" "$_cx_project" || exit 0
+  tmux set-option -p -t "$_cx_pane" "$VBOX_INJECTED_OPT" "$_cx_current" 2>/dev/null || true
+  exit 0
+}
+
 [ $# -ge 1 ] || usage
 CMD="$1"
 shift
@@ -484,6 +693,9 @@ case "$CMD" in
   uninstall)  cmd_uninstall "$@" ;;
   current)    cmd_current "$@" ;;
   resolve)    cmd_resolve "$@" ;;
+  pick)          cmd_pick "$@" ;;
+  session-start) cmd_session_start "$@" ;;
+  context)       cmd_context "$@" ;;
   -h|--help)  usage ;;
   *)          usage ;;
 esac

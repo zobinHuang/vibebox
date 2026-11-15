@@ -15,7 +15,7 @@
 
 set -u
 
-VBOX_OWNED_MARKER='vbox-(agent|music|session)'
+VBOX_OWNED_MARKER='vbox-(agent|music|session|playbook)'
 VBOX_CONNECT_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/vibebox/connect.json"
 CLAUDE_SETTINGS="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
 CODEX_HOOKS="${CODEX_HOME:-$HOME/.codex}/hooks.json"
@@ -127,6 +127,33 @@ vbox_codex_upload_hooks() {
 JSON
 }
 
+# ─── playbooks ────────────────────────────────────────────────────────
+# SessionStart is where a new session is offered a playbook and told what
+# it loaded; UserPromptSubmit is what carries that over to a session whose
+# playbook was switched while it was running. Both only make sense once a
+# server is connected, so they go in alongside the upload hooks.
+#
+# Neither is a tool hook, deliberately: SessionStart may put a picker on
+# screen and wait for an answer, and nothing that can block belongs on a
+# path that runs on every tool call.
+vbox_claude_playbook_hooks() {
+  cat <<'JSON'
+{
+  "SessionStart":     [ { "hooks": [ { "type": "command", "command": "$HOME/.local/bin/vbox-playbook session-start claude" } ] } ],
+  "UserPromptSubmit": [ { "hooks": [ { "type": "command", "command": "$HOME/.local/bin/vbox-playbook context claude" } ] } ]
+}
+JSON
+}
+
+vbox_codex_playbook_hooks() {
+  cat <<'JSON'
+{
+  "SessionStart":     [ { "hooks": [ { "type": "command", "command": "$HOME/.local/bin/vbox-playbook session-start codex" } ] } ],
+  "UserPromptSubmit": [ { "hooks": [ { "type": "command", "command": "$HOME/.local/bin/vbox-playbook context codex" } ] } ]
+}
+JSON
+}
+
 # ─── combine two hook sets ────────────────────────────────────────────
 # Both sets are keyed by event, and an event that appears in both keeps
 # the entries of each, in order.
@@ -154,12 +181,21 @@ sys.stdout.write(json.dumps(map_merged))
 vbox_hook_set() {
   # vbox_hook_set <claude|codex> — the hooks vibebox should own right now
   case "$1" in
-    claude) _bar="$(vbox_claude_hooks)"; _up="$(vbox_claude_upload_hooks)" ;;
-    codex)  _bar="$(vbox_codex_hooks)";  _up="$(vbox_codex_upload_hooks)" ;;
-    *)      return 1 ;;
+    claude)
+      _bar="$(vbox_claude_hooks)"
+      _up="$(vbox_claude_upload_hooks)"
+      _pb="$(vbox_claude_playbook_hooks)"
+      ;;
+    codex)
+      _bar="$(vbox_codex_hooks)"
+      _up="$(vbox_codex_upload_hooks)"
+      _pb="$(vbox_codex_playbook_hooks)"
+      ;;
+    *) return 1 ;;
   esac
   if [ -f "$VBOX_CONNECT_FILE" ]; then
-    vbox_json_union "$_bar" "$_up" && return 0
+    _merged="$(vbox_json_union "$_bar" "$_up")" || return 1
+    vbox_json_union "$_merged" "$_pb" && return 0
     return 1
   fi
   printf '%s' "$_bar"
