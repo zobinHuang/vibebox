@@ -1,0 +1,520 @@
+#!/bin/sh
+# [vibebox] vbox-session — ship a code agent's session transcript to a
+# vboxd server as it is written.
+#
+#   vbox-session connect <host> <port> --token <t> [--tls] [--insecure] [--no-email]
+#   vbox-session disconnect
+#   vbox-session status
+#   vbox-session upload <claude|codex>    hook entry point; payload on stdin
+#   vbox-session flush                    retry whatever is behind
+#
+# The server, not this script, is the authority on how much of a
+# transcript has already been stored: every flush asks it for the stored
+# length and the digest of the stored leading bytes, then sends only what
+# follows. That means a corrupt local cursor, two machines uploading the
+# same session, a transcript rewritten rather than appended to, and a
+# flush that died halfway all heal by themselves on the next event.
+#
+# The local ledger is only a hint about what is worth retrying, so losing
+# it costs one catch-up, not any data.
+
+set -u
+
+VBOX_CONNECT_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/vibebox/connect.json"
+VBOX_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/vibebox"
+VBOX_LEDGER="$VBOX_STATE_DIR/sessions.tsv"
+VBOX_LOCK_DIR="$VBOX_STATE_DIR/locks"
+VBOX_LOG="$VBOX_STATE_DIR/upload.log"
+VBOX_SELF="$HOME/.local/bin/vbox-session"
+VBOX_PREFIX_BYTES=4096
+VBOX_FLUSH_MAX=20
+VBOX_LOG_MAX_LINES=2000
+VBOX_HTTP_TIMEOUT=60
+VBOX_LOCK_STALE_MINUTES=10
+
+usage() {
+  cat >&2 <<'EOF'
+Usage:
+  vbox-session connect <host> <port> --token <token> [--tls] [--insecure] [--no-email]
+  vbox-session disconnect
+  vbox-session status
+  vbox-session flush
+  vbox-session upload <claude|codex>     hook entry point; payload on stdin
+EOF
+  exit 1
+}
+
+log() {
+  mkdir -p "$VBOX_STATE_DIR" 2>/dev/null || return 0
+  printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*" >> "$VBOX_LOG" 2>/dev/null || true
+}
+
+# ─── read one scalar out of a JSON file ───────────────────────────────
+# Agent hook payloads and the agents' own config are the only JSON this
+# script reads, and it only ever needs single scalars out of them, so jq
+# is preferred, python3 is next, and a grep over the raw text is the last
+# resort for machines that have neither.
+json_get() {
+  # json_get <file> <dotted.path>
+  _jf="$1"
+  _jp="$2"
+  [ -f "$_jf" ] || return 0
+  if command -v jq >/dev/null 2>&1; then
+    jq -r --arg p "$_jp" '
+      try (getpath($p | split(".")) | select(. != null) | tostring) catch empty
+    ' "$_jf" 2>/dev/null
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    VBOX_JSON_PATH="$_jp" python3 -I -c '
+import json, os, sys
+value = json.load(open(sys.argv[1]))
+for key in os.environ["VBOX_JSON_PATH"].split("."):
+    if not isinstance(value, dict):
+        raise SystemExit(0)
+    value = value.get(key)
+if value is None or isinstance(value, (dict, list)):
+    raise SystemExit(0)
+sys.stdout.write(str(value))
+' "$_jf" 2>/dev/null
+    return 0
+  fi
+  _jk="${_jp##*.}"
+  tr -d '\n' < "$_jf" |
+    grep -o "\"$_jk\"[[:space:]]*:[[:space:]]*\(\"[^\"]*\"\|-\{0,1\}[0-9][0-9]*\|true\|false\)" |
+    head -1 |
+    sed -e "s/^\"$_jk\"[[:space:]]*:[[:space:]]*//" -e 's/^"//' -e 's/"$//'
+}
+
+json_escape() {
+  # json_escape <text> — enough for the paths, branches and ids we send
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/	/\\t/g'
+}
+
+json_field() {
+  # json_field <name> <value> — a JSON string member, or null when empty
+  if [ -z "$2" ]; then
+    printf '"%s":null' "$1"
+  else
+    printf '"%s":"%s"' "$1" "$(json_escape "$2")"
+  fi
+}
+
+json_bool() {
+  # json_bool <text> <default-1-or-0> — jq writes true/false, python3 True/False
+  case "$1" in
+    true|True|1)   printf '1' ;;
+    false|False|0) printf '0' ;;
+    *)             printf '%s' "$2" ;;
+  esac
+}
+
+file_size() {
+  [ -f "$1" ] || { printf '0'; return 0; }
+  wc -c < "$1" | tr -d ' '
+}
+
+sha256_prefix() {
+  # sha256_prefix <file> <bytes>
+  # The byte count is the caller's business: the server hashes the first
+  # 4096 bytes of what it holds, which for a transcript shorter than that
+  # is the whole stored file. Hashing more of the local copy than the
+  # server hashed of its own would differ on every append and read as a
+  # rewritten transcript.
+  [ -f "$1" ] || return 0
+  if command -v shasum >/dev/null 2>&1; then
+    head -c "$2" "$1" | shasum -a 256 | cut -d' ' -f1
+  elif command -v sha256sum >/dev/null 2>&1; then
+    head -c "$2" "$1" | sha256sum | cut -d' ' -f1
+  fi
+}
+
+# ─── connection state ─────────────────────────────────────────────────
+load_connection() {
+  [ -f "$VBOX_CONNECT_FILE" ] || return 1
+  VBOX_BASE_URL="$(json_get "$VBOX_CONNECT_FILE" base_url)"
+  VBOX_TOKEN="$(json_get "$VBOX_CONNECT_FILE" token)"
+  VBOX_INSECURE="$(json_bool "$(json_get "$VBOX_CONNECT_FILE" insecure)" 0)"
+  VBOX_SEND_EMAIL="$(json_bool "$(json_get "$VBOX_CONNECT_FILE" send_email)" 1)"
+  [ -n "$VBOX_BASE_URL" ] && [ -n "$VBOX_TOKEN" ]
+}
+
+api() {
+  # api <method> <path> [body-file] — sets VBOX_STATUS and VBOX_RESPONSE
+  _am="$1"
+  _ap="$2"
+  _ab="${3:-}"
+  VBOX_RESPONSE="$VBOX_WORK/response.json"
+  set -- -sS -X "$_am" \
+    -H "Authorization: Bearer $VBOX_TOKEN" \
+    -o "$VBOX_RESPONSE" -w '%{http_code}' \
+    --max-time "$VBOX_HTTP_TIMEOUT"
+  [ "$VBOX_INSECURE" = 1 ] && set -- "$@" -k
+  if [ -n "$_ab" ]; then
+    # A temp file, not a pipe: piping makes curl send a chunked body with
+    # no Content-Length, which the server refuses.
+    set -- "$@" --data-binary "@$_ab" -H 'Content-Type: application/octet-stream'
+  fi
+  VBOX_STATUS="$(curl "$@" "$VBOX_BASE_URL$_ap" 2>>"$VBOX_LOG")" || VBOX_STATUS=0
+  [ "$VBOX_STATUS" -ge 200 ] 2>/dev/null && [ "$VBOX_STATUS" -lt 300 ]
+}
+
+# ─── the agent's logged-in account ────────────────────────────────────
+# Only codex records the account in the transcript itself; Claude Code's
+# transcript carries no identity at all, so its account is read out of
+# the CLI's own config next to it.
+account_json() {
+  # account_json <agent> <transcript>
+  _acct_uuid=""
+  _acct_email=""
+  _acct_label=""
+  case "$1" in
+    claude)
+      for _cfg in "${CLAUDE_CONFIG_DIR:-}/.claude.json" "$HOME/.claude.json"; do
+        [ -f "$_cfg" ] || continue
+        _acct_uuid="$(json_get "$_cfg" oauthAccount.accountUuid)"
+        _acct_email="$(json_get "$_cfg" oauthAccount.emailAddress)"
+        _acct_label="$(json_get "$_cfg" oauthAccount.organizationUuid)"
+        [ -n "$_acct_uuid" ] && break
+      done
+      ;;
+    codex)
+      head -1 "$2" > "$VBOX_WORK/first-line.json" 2>/dev/null || true
+      _acct_uuid="$(json_get "$VBOX_WORK/first-line.json" payload.creator_account_id)"
+      _acct_label="$(json_get "$VBOX_WORK/first-line.json" payload.creator_user_id)"
+      ;;
+  esac
+  [ "$VBOX_SEND_EMAIL" = 1 ] || _acct_email=""
+  printf '{%s,%s,%s}' \
+    "$(json_field uuid "$_acct_uuid")" \
+    "$(json_field email "$_acct_email")" \
+    "$(json_field label "$_acct_label")"
+}
+
+find_transcript() {
+  # find_transcript <agent> <session-id> — for payloads that carry no path
+  case "$1" in
+    claude)
+      ls -t "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects"/*/"$2.jsonl" 2>/dev/null | head -1
+      ;;
+    codex)
+      find "${CODEX_HOME:-$HOME/.codex}/sessions" -type f -name "*$2.jsonl" 2>/dev/null |
+        head -1
+      ;;
+  esac
+}
+
+# ─── the ledger of what might still be behind ─────────────────────────
+ledger_record() {
+  # ledger_record <agent> <session-id> <transcript> <uploaded-bytes> <cwd>
+  mkdir -p "$VBOX_STATE_DIR" 2>/dev/null || return 0
+  _lt="$VBOX_WORK/ledger.tsv"
+  if [ -f "$VBOX_LEDGER" ]; then
+    awk -F'\t' -v id="$2" '$2 != id' "$VBOX_LEDGER" > "$_lt" 2>/dev/null || : > "$_lt"
+  else
+    : > "$_lt"
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" >> "$_lt"
+  mv "$_lt" "$VBOX_LEDGER" 2>/dev/null || true
+}
+
+ledger_forget() {
+  # ledger_forget <session-id>
+  [ -f "$VBOX_LEDGER" ] || return 0
+  _lt="$VBOX_WORK/ledger.tsv"
+  awk -F'\t' -v id="$1" '$2 != id' "$VBOX_LEDGER" > "$_lt" 2>/dev/null || return 0
+  mv "$_lt" "$VBOX_LEDGER" 2>/dev/null || true
+}
+
+# ─── push one session's new bytes ─────────────────────────────────────
+upload_session() {
+  # upload_session <agent> <session-id> <transcript> <cwd> <event>
+  _up_agent="$1"
+  _up_id="$2"
+  _up_file="$3"
+  _up_cwd="$4"
+  _up_event="$5"
+
+  [ -f "$_up_file" ] || { log "no transcript for $_up_id"; return 1; }
+
+  _up_branch="$(git -C "$_up_cwd" rev-parse --abbrev-ref HEAD 2>/dev/null)" || _up_branch=""
+  printf '{"agent":"%s",%s,%s,%s,%s,"account":%s}' \
+    "$_up_agent" \
+    "$(json_field cwd "$_up_cwd")" \
+    "$(json_field host "$(hostname 2>/dev/null)")" \
+    "$(json_field git_branch "$_up_branch")" \
+    "$(json_field transcript_path "$_up_file")" \
+    "$(account_json "$_up_agent" "$_up_file")" \
+    > "$VBOX_WORK/begin.json"
+
+  if ! api POST "/v1/sessions/$_up_id/begin" "$VBOX_WORK/begin.json"; then
+    log "begin failed for $_up_id (status $VBOX_STATUS)"
+    return 1
+  fi
+  _up_cursor="$(json_get "$VBOX_RESPONSE" cursor)"
+  _up_remote_prefix="$(json_get "$VBOX_RESPONSE" prefix_sha256)"
+
+  if ! send_from "$_up_id" "$_up_file" "$_up_cursor" "$_up_remote_prefix"; then
+    return 1
+  fi
+
+  case "$_up_event" in
+    SessionEnd|sessionEnd|session_end)
+      api POST "/v1/sessions/$_up_id/close" "$VBOX_WORK/empty.json" || true
+      ledger_forget "$_up_id"
+      log "closed $_up_agent $_up_id"
+      return 0
+      ;;
+  esac
+  ledger_record "$_up_agent" "$_up_id" "$_up_file" "$(file_size "$_up_file")" "$_up_cwd"
+  return 0
+}
+
+send_from() {
+  # send_from <session-id> <transcript> <cursor> <remote-prefix>
+  _sf_id="$1"
+  _sf_file="$2"
+  _sf_cursor="$3"
+  _sf_remote_prefix="$4"
+  case "$_sf_cursor" in ''|*[!0-9]*) _sf_cursor=0 ;; esac
+  _sf_size="$(file_size "$_sf_file")"
+  _sf_reset=0
+
+  # The transcript is supposed to only ever grow. When the stored prefix
+  # no longer matches, or the local file is shorter than what is stored,
+  # it was rewritten instead, and the whole thing goes up again.
+  if [ "$_sf_cursor" -gt 0 ] 2>/dev/null; then
+    if [ "$_sf_size" -lt "$_sf_cursor" ]; then
+      _sf_reset=1
+    else
+      _sf_hashed="$VBOX_PREFIX_BYTES"
+      [ "$_sf_cursor" -lt "$_sf_hashed" ] && _sf_hashed="$_sf_cursor"
+      if [ -n "$_sf_remote_prefix" ] &&
+         [ "$_sf_remote_prefix" != "$(sha256_prefix "$_sf_file" "$_sf_hashed")" ]; then
+        _sf_reset=1
+      fi
+    fi
+  fi
+  [ "$_sf_reset" -eq 1 ] && _sf_cursor=0
+
+  if [ "$_sf_size" -eq "$_sf_cursor" ] && [ "$_sf_reset" -eq 0 ]; then
+    return 0
+  fi
+
+  tail -c "+$((_sf_cursor + 1))" "$_sf_file" > "$VBOX_WORK/chunk" 2>/dev/null || return 1
+  _sf_query="offset=$_sf_cursor"
+  [ "$_sf_reset" -eq 1 ] && _sf_query="$_sf_query&reset=1"
+  if api PUT "/v1/sessions/$_sf_id/data?$_sf_query" "$VBOX_WORK/chunk"; then
+    log "sent $(file_size "$VBOX_WORK/chunk") bytes of $_sf_id from $_sf_cursor"
+    return 0
+  fi
+
+  # A conflict means something else moved the cursor between the begin and
+  # the write. The server hands back the offset to resume from, so one
+  # retry against that offset is enough.
+  if [ "$VBOX_STATUS" = "409" ]; then
+    _sf_cursor="$(json_get "$VBOX_RESPONSE" cursor)"
+    _sf_remote_prefix="$(json_get "$VBOX_RESPONSE" prefix_sha256)"
+    log "cursor conflict on $_sf_id, resuming from $_sf_cursor"
+    tail -c "+$((_sf_cursor + 1))" "$_sf_file" > "$VBOX_WORK/chunk" 2>/dev/null || return 1
+    api PUT "/v1/sessions/$_sf_id/data?offset=$_sf_cursor" "$VBOX_WORK/chunk" && return 0
+  fi
+  log "data failed for $_sf_id (status $VBOX_STATUS)"
+  return 1
+}
+
+# ─── work area, held for one invocation ───────────────────────────────
+open_work_dir() {
+  VBOX_WORK="$(mktemp -d "${TMPDIR:-/tmp}/vbox-session.XXXXXX")" || return 1
+  trap 'rm -rf "$VBOX_WORK"' EXIT HUP INT TERM
+  printf '{}' > "$VBOX_WORK/empty.json"
+}
+
+trim_log() {
+  [ -f "$VBOX_LOG" ] || return 0
+  _tl_lines="$(wc -l < "$VBOX_LOG" | tr -d ' ')"
+  [ "$_tl_lines" -le "$VBOX_LOG_MAX_LINES" ] 2>/dev/null && return 0
+  tail -n "$((VBOX_LOG_MAX_LINES / 2))" "$VBOX_LOG" > "$VBOX_WORK/log" 2>/dev/null || return 0
+  mv "$VBOX_WORK/log" "$VBOX_LOG" 2>/dev/null || true
+}
+
+# ─── commands ─────────────────────────────────────────────────────────
+cmd_connect() {
+  [ $# -ge 2 ] || usage
+  _host="$1"
+  _port="$2"
+  shift 2
+  _token=""
+  _scheme="http"
+  _insecure=false
+  _send_email=true
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --token)    _token="${2:-}"; shift 2 ;;
+      --tls)      _scheme="https"; shift ;;
+      --insecure) _insecure=true; _scheme="https"; shift ;;
+      --no-email) _send_email=false; shift ;;
+      *) printf 'vbox-session: unknown flag %s\n' "$1" >&2; usage ;;
+    esac
+  done
+  if [ -z "$_token" ] && [ -f "$VBOX_CONNECT_FILE" ]; then
+    _token="$(json_get "$VBOX_CONNECT_FILE" token)"
+  fi
+  if [ -z "$_token" ]; then
+    printf 'vbox-session: --token is required\n' >&2
+    exit 1
+  fi
+
+  _base="$_scheme://$_host:$_port"
+  _curl_flags="-fsS"
+  [ "$_insecure" = true ] && _curl_flags="-fsSk"
+  if ! curl $_curl_flags --max-time 10 "$_base/v1/healthz" >/dev/null 2>&1; then
+    printf 'vbox-session: no vboxd answering at %s\n' "$_base" >&2
+    exit 1
+  fi
+
+  mkdir -p "$(dirname "$VBOX_CONNECT_FILE")"
+  umask 077
+  printf '{\n  "base_url": "%s",\n  "token": "%s",\n  "insecure": %s,\n  "send_email": %s\n}\n' \
+    "$(json_escape "$_base")" "$(json_escape "$_token")" "$_insecure" "$_send_email" \
+    > "$VBOX_CONNECT_FILE"
+  chmod 600 "$VBOX_CONNECT_FILE"
+  printf 'Connected to %s\n' "$_base"
+  "$HOME/.local/bin/vbox-hooks" install >/dev/null 2>&1 ||
+    printf 'vbox-session: could not install the upload hooks\n' >&2
+  printf 'Session history will upload from the next agent turn.\n'
+  exit 0
+}
+
+cmd_disconnect() {
+  if [ -f "$VBOX_CONNECT_FILE" ]; then
+    rm -f "$VBOX_CONNECT_FILE"
+    printf 'Disconnected.\n'
+  else
+    printf 'Not connected.\n'
+  fi
+  "$HOME/.local/bin/vbox-hooks" install >/dev/null 2>&1 || true
+  exit 0
+}
+
+cmd_status() {
+  if ! load_connection; then
+    printf 'Not connected. Run: vbox connect <host> <port> --token <token>\n'
+    exit 0
+  fi
+  printf 'server:  %s\n' "$VBOX_BASE_URL"
+  if curl -fsSk --max-time 10 "$VBOX_BASE_URL/v1/healthz" >/dev/null 2>&1; then
+    printf 'health:  reachable\n'
+  else
+    printf 'health:  UNREACHABLE\n'
+  fi
+  if [ -f "$VBOX_LEDGER" ]; then
+    printf 'tracked: %s session(s)\n' "$(wc -l < "$VBOX_LEDGER" | tr -d ' ')"
+  else
+    printf 'tracked: 0 session(s)\n'
+  fi
+  printf 'log:     %s\n' "$VBOX_LOG"
+  exit 0
+}
+
+cmd_upload() {
+  # The hook entry point. Everything here must be cheap and must never
+  # fail the agent, so stdin is drained to a file and the real work is
+  # handed to a detached copy of this script.
+  _agent="${1:-}"
+  case "$_agent" in claude|codex) ;; *) exit 0 ;; esac
+  [ -f "$VBOX_CONNECT_FILE" ] || exit 0
+  mkdir -p "$VBOX_STATE_DIR" 2>/dev/null || exit 0
+  _payload="$(mktemp "$VBOX_STATE_DIR/payload.XXXXXX")" || exit 0
+  cat > "$_payload" 2>/dev/null || true
+  _self="$VBOX_SELF"
+  [ -x "$_self" ] || _self="$0"
+  nohup "$_self" run-upload "$_agent" "$_payload" >/dev/null 2>&1 &
+  exit 0
+}
+
+cmd_run_upload() {
+  [ $# -eq 2 ] || exit 0
+  _agent="$1"
+  _payload="$2"
+  open_work_dir || exit 0
+  trap 'rm -rf "$VBOX_WORK"; rm -f "$_payload"' EXIT HUP INT TERM
+  load_connection || exit 0
+
+  _session_id="$(json_get "$_payload" session_id)"
+  [ -n "$_session_id" ] || exit 0
+  _event="$(json_get "$_payload" hook_event_name)"
+  _cwd="$(json_get "$_payload" cwd)"
+  _transcript="$(json_get "$_payload" transcript_path)"
+  if [ -z "$_transcript" ] || [ ! -f "$_transcript" ]; then
+    _transcript="$(find_transcript "$_agent" "$_session_id")"
+  fi
+
+  if with_session_lock "$_session_id"; then
+    upload_session "$_agent" "$_session_id" "$_transcript" "$_cwd" "$_event" || true
+    release_session_lock "$_session_id"
+  fi
+
+  case "$_event" in
+    SessionStart|sessionStart|session_start) flush_backlog ;;
+  esac
+  trim_log
+  exit 0
+}
+
+with_session_lock() {
+  mkdir -p "$VBOX_LOCK_DIR" 2>/dev/null || return 1
+  mkdir "$VBOX_LOCK_DIR/$1" 2>/dev/null && return 0
+  # An uploader killed mid-flight leaves its lock behind, and the session
+  # would then never upload again. Anything this old is not a live flush.
+  if [ -n "$(find "$VBOX_LOCK_DIR/$1" -maxdepth 0 -mmin "+$VBOX_LOCK_STALE_MINUTES" 2>/dev/null)" ]; then
+    rmdir "$VBOX_LOCK_DIR/$1" 2>/dev/null || return 1
+    mkdir "$VBOX_LOCK_DIR/$1" 2>/dev/null && return 0
+  fi
+  return 1
+}
+
+release_session_lock() {
+  rmdir "$VBOX_LOCK_DIR/$1" 2>/dev/null || true
+}
+
+# ─── catch up on whatever is behind ───────────────────────────────────
+# A flush that died with the machine, an agent killed mid-turn, or a
+# server that was down all leave a session short on the server. Nothing
+# is lost — the local transcript is still the whole truth — so the next
+# SessionStart walks the ledger and pushes the difference.
+flush_backlog() {
+  [ -f "$VBOX_LEDGER" ] || return 0
+  _fb_pending="$VBOX_WORK/pending.tsv"
+  tail -n "$VBOX_FLUSH_MAX" "$VBOX_LEDGER" > "$_fb_pending" 2>/dev/null || return 0
+  while IFS='	' read -r _fb_agent _fb_id _fb_file _fb_sent _fb_cwd; do
+    [ -n "${_fb_id:-}" ] || continue
+    [ -f "${_fb_file:-}" ] || continue
+    [ "$(file_size "$_fb_file")" = "${_fb_sent:-0}" ] && continue
+    with_session_lock "$_fb_id" || continue
+    upload_session "$_fb_agent" "$_fb_id" "$_fb_file" "${_fb_cwd:-}" "" || true
+    release_session_lock "$_fb_id"
+  done < "$_fb_pending"
+}
+
+cmd_flush() {
+  open_work_dir || exit 0
+  load_connection || exit 0
+  flush_backlog
+  trim_log
+  exit 0
+}
+
+[ $# -ge 1 ] || usage
+CMD="$1"
+shift
+case "$CMD" in
+  connect)     cmd_connect "$@" ;;
+  disconnect)  cmd_disconnect ;;
+  status)      cmd_status ;;
+  upload)      cmd_upload "$@" ;;
+  run-upload)  cmd_run_upload "$@" ;;
+  flush)       cmd_flush ;;
+  -h|--help)   usage ;;
+  *)           usage ;;
+esac
