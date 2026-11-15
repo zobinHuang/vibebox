@@ -9,6 +9,11 @@ usage() {
   echo "  vbox ls                     List all vbox sessions"
   echo "  vbox kill <name>            Kill a session by name"
   echo "  vbox exit                   Kill current session"
+  echo ""
+  echo "  vbox connect <host> <port> --token <token>"
+  echo "                              Upload agent session history to a vboxd server"
+  echo "  vbox disconnect             Stop uploading session history"
+  echo "  vbox sessions               Show the upload connection and its backlog"
   exit 1
 }
 
@@ -102,6 +107,12 @@ case "$CMD" in
     fi
     tmux new-session -d -s "$SESSION_NAME" -c "$HOME"
     tmux attach-session -t "$SESSION_NAME"
+    ;;
+  connect|disconnect)
+    exec "$HOME/.local/bin/vbox-session" "$CMD" "$@"
+    ;;
+  sessions)
+    exec "$HOME/.local/bin/vbox-session" status
     ;;
   -h|--help) usage ;;
   *)         usage ;;

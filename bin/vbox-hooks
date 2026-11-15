@@ -15,7 +15,8 @@
 
 set -u
 
-VBOX_OWNED_MARKER='vbox-(agent|music)'
+VBOX_OWNED_MARKER='vbox-(agent|music|session)'
+VBOX_CONNECT_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/vibebox/connect.json"
 CLAUDE_SETTINGS="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
 CODEX_HOOKS="${CODEX_HOME:-$HOME/.codex}/hooks.json"
 
@@ -90,6 +91,78 @@ vbox_codex_hooks() {
   "SessionEnd":        [ { "hooks": [ { "type": "command", "command": "$HOME/.local/bin/vbox-agent set \"$TMUX_PANE\" none" } ] } ]
 }
 JSON
+}
+
+# ─── session upload ───────────────────────────────────────────────────
+# These only go in once `vbox connect` has recorded a server, so an
+# install that never connects to one keeps the agents' config free of
+# upload hooks entirely.
+#
+# The chosen events are the turn boundaries, never the tool hooks: a
+# transcript is only worth shipping once a turn has finished writing to
+# it, and PreToolUse/PostToolUse fire far too often to be a sane place to
+# touch the network. SessionStart doubles as the catch-up trigger for
+# anything a dead server or a killed agent left behind, and SessionEnd is
+# what marks a session closed on the server.
+vbox_claude_upload_hooks() {
+  cat <<'JSON'
+{
+  "SessionStart": [ { "hooks": [ { "type": "command", "command": "$HOME/.local/bin/vbox-session upload claude" } ] } ],
+  "Stop":         [ { "hooks": [ { "type": "command", "command": "$HOME/.local/bin/vbox-session upload claude" } ] } ],
+  "StopFailure":  [ { "hooks": [ { "type": "command", "command": "$HOME/.local/bin/vbox-session upload claude" } ] } ],
+  "PreCompact":   [ { "hooks": [ { "type": "command", "command": "$HOME/.local/bin/vbox-session upload claude" } ] } ],
+  "SessionEnd":   [ { "hooks": [ { "type": "command", "command": "$HOME/.local/bin/vbox-session upload claude" } ] } ]
+}
+JSON
+}
+
+vbox_codex_upload_hooks() {
+  cat <<'JSON'
+{
+  "SessionStart": [ { "hooks": [ { "type": "command", "command": "$HOME/.local/bin/vbox-session upload codex" } ] } ],
+  "Stop":         [ { "hooks": [ { "type": "command", "command": "$HOME/.local/bin/vbox-session upload codex" } ] } ],
+  "PreCompact":   [ { "hooks": [ { "type": "command", "command": "$HOME/.local/bin/vbox-session upload codex" } ] } ],
+  "SessionEnd":   [ { "hooks": [ { "type": "command", "command": "$HOME/.local/bin/vbox-session upload codex" } ] } ]
+}
+JSON
+}
+
+# ─── combine two hook sets ────────────────────────────────────────────
+# Both sets are keyed by event, and an event that appears in both keeps
+# the entries of each, in order.
+vbox_json_union() {
+  # vbox_json_union <json-a> <json-b>
+  if command -v jq >/dev/null 2>&1; then
+    jq -n --argjson a "$1" --argjson b "$2" '
+      reduce ($b | to_entries)[] as $e ($a; .[$e.key] = ((.[$e.key] // []) + $e.value))
+    ' 2>/dev/null
+    return $?
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -I -c '
+import json, sys
+map_merged = json.loads(sys.argv[1])
+for event, list_groups in json.loads(sys.argv[2]).items():
+    map_merged[event] = map_merged.get(event, []) + list_groups
+sys.stdout.write(json.dumps(map_merged))
+' "$1" "$2" 2>/dev/null
+    return $?
+  fi
+  return 2
+}
+
+vbox_hook_set() {
+  # vbox_hook_set <claude|codex> — the hooks vibebox should own right now
+  case "$1" in
+    claude) _bar="$(vbox_claude_hooks)"; _up="$(vbox_claude_upload_hooks)" ;;
+    codex)  _bar="$(vbox_codex_hooks)";  _up="$(vbox_codex_upload_hooks)" ;;
+    *)      return 1 ;;
+  esac
+  if [ -f "$VBOX_CONNECT_FILE" ]; then
+    vbox_json_union "$_bar" "$_up" && return 0
+    return 1
+  fi
+  printf '%s' "$_bar"
 }
 
 # ─── merge ────────────────────────────────────────────────────────────
@@ -172,11 +245,11 @@ vbox_apply() {
 }
 
 cmd_install() {
-  vbox_apply claude "$CLAUDE_SETTINGS" "$(vbox_claude_hooks)"
+  vbox_apply claude "$CLAUDE_SETTINGS" "$(vbox_hook_set claude)"
   # Only wire up codex if it is actually installed, rather than creating
   # config for a tool that isn't there.
   if command -v codex >/dev/null 2>&1; then
-    vbox_apply codex "$CODEX_HOOKS" "$(vbox_codex_hooks)"
+    vbox_apply codex "$CODEX_HOOKS" "$(vbox_hook_set codex)"
   else
     printf 'codex: absent\n'
   fi

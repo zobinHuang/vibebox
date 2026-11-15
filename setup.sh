@@ -363,6 +363,11 @@ if _vbox_install_or_fail bin/vbox-hooks "$HOME/.local/bin/vbox-hooks" "vbox-hook
   info "Installed vbox-hooks"
 fi
 
+if _vbox_install_or_fail bin/vbox-session "$HOME/.local/bin/vbox-session" "vbox-session"; then
+  chmod +x "$HOME/.local/bin/vbox-session"
+  info "Installed vbox-session"
+fi
+
 # ─── 4. install vbox command ─────────────────────────────────────
 echo ""
 echo "── vbox command ──────────────────────────────"
@@ -461,6 +466,8 @@ echo "    vbox attach <name>       Attach to existing session"
 echo "    vbox ls                  List all sessions"
 echo "    vbox kill <name>         Kill a session"
 echo "    vbox exit                Kill current session"
+echo "    vbox connect <host> <port> --token <token>"
+echo "                             Upload session history to a vboxd server"
 echo ""
 echo "  Tabs (Ctrl+t):          Panes (Ctrl+p):"
 echo "    n   new tab              d   split down"
