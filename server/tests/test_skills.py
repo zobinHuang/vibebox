@@ -76,6 +76,23 @@ class SkillSourceTest(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertNotEqual(first, SkillSource.parse("owner/repo@two").identifier())
 
+    def test_a_spec_round_trips_without_changing_the_transport(self) -> None:
+        for spec in (
+            "owner/repo",
+            "owner/repo@one",
+            "owner/repo@dir/one#v2",
+            "https://gitlab.com/g/s/r@a/b#main",
+            "git@github.com:o/r.git@one",
+            "https://github.com/o/r.git@one",
+            "ssh://git@example.com/o/r#main",
+        ):
+            with self.subTest(spec=spec):
+                source = SkillSource.parse(spec)
+                again = SkillSource.parse(source.as_spec())
+                self.assertEqual(again.repo_url, source.repo_url)
+                self.assertEqual(again.skill_path, source.skill_path)
+                self.assertEqual(again.ref, source.ref)
+
     def test_identifier_is_a_safe_file_name(self) -> None:
         identifier = SkillSource.parse("https://gitlab.com/g/s/r@a/b").identifier()
         self.assertNotIn("/", identifier)

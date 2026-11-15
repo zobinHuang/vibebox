@@ -148,6 +148,26 @@ class SkillSource:
             parts.append(self.skill_path)
         return RecordStore.slugify("-".join(parts), fallback="skill")
 
+    def as_spec(self) -> str:
+        """Render the source back into the one-line form it is written in.
+
+        Returns:
+            the canonical `repo@path#ref` spelling of this source
+        """
+        spec = self.repo_url
+        # Only an https github.com URL may shorten to owner/repo: shortening an
+        # ssh or scp-style URL would re-parse as https and silently change the
+        # transport a private repository is reached over.
+        if self.repo_url == (
+            f"https://{self.SOURCE_DEFAULT_HOST}/{self.repo_slug()}"
+        ) and self.SOURCE_SHORTHAND_PATTERN.match(self.repo_slug()):
+            spec = self.repo_slug()
+        if self.skill_path:
+            spec = f"{spec}@{self.skill_path}"
+        if self.ref:
+            spec = f"{spec}#{self.ref}"
+        return spec
+
     def as_payload(self) -> dict[str, object]:
         """Render the source as JSON.
 
@@ -480,7 +500,7 @@ class SkillIndex:
             else:
                 record = SkillRecord(
                     id=record_id,
-                    source=str(map_body.get("source") or source.repo_url),
+                    source=str(map_body.get("source") or source.as_spec()),
                     repo_url=source.repo_url,
                     skill_path=source.skill_path,
                     created_at=timestamp,
