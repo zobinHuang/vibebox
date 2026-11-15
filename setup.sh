@@ -405,7 +405,7 @@ VBOX_CODEX_NEEDS_TRUST=0
 while IFS=: read -r VBOX_HOOK_AGENT VBOX_HOOK_RESULT; do
   VBOX_HOOK_RESULT="${VBOX_HOOK_RESULT# }"
   case "$VBOX_HOOK_AGENT:$VBOX_HOOK_RESULT" in
-    claude:merged) info "Merged Claude Code hooks into $HOME/.claude/settings.json" ;;
+    claude:merged) info "Merged Claude Code hooks into ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" ;;
     codex:merged)  info "Merged Codex hooks into ${CODEX_HOME:-$HOME/.codex}/hooks.json"
                    VBOX_CODEX_NEEDS_TRUST=1 ;;
     codex:absent)  ;;

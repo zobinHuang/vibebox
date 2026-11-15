@@ -16,7 +16,7 @@
 set -u
 
 VBOX_OWNED_MARKER='vbox-(agent|music)'
-CLAUDE_SETTINGS="$HOME/.claude/settings.json"
+CLAUDE_SETTINGS="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
 CODEX_HOOKS="${CODEX_HOME:-$HOME/.codex}/hooks.json"
 
 usage() {
