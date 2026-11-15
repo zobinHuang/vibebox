@@ -158,6 +158,20 @@ class HttpApiTest(unittest.TestCase):
         )
         self.assertEqual(status, 413)
 
+    def test_chunked_body_is_rejected(self) -> None:
+        self.begin()
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        try:
+            connection.putrequest("PUT", "/v1/sessions/s-1/data?offset=0")
+            connection.putheader("Authorization", f"Bearer {self.TEST_TOKEN}")
+            connection.putheader("Transfer-Encoding", "chunked")
+            connection.endheaders()
+            connection.send(b"5\r\nhello\r\n0\r\n\r\n")
+            self.assertEqual(connection.getresponse().status, 400)
+        finally:
+            connection.close()
+        self.assertEqual(list(self.root.rglob("transcript.jsonl")), [])
+
     def test_missing_offset_is_rejected(self) -> None:
         self.begin()
         status, _ = self.request("PUT", "/v1/sessions/s-1/data", b"x")

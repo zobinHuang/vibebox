@@ -163,6 +163,11 @@ class VboxdRequestHandler(BaseHTTPRequestHandler):
             raise AuthError("bearer token not accepted")
 
     def _read_body(self) -> bytes:
+        encoding = (self.headers.get("Transfer-Encoding") or "").lower()
+        if "chunked" in encoding:
+            raise ValidationError(
+                "chunked request bodies are not accepted; send Content-Length"
+            )
         raw_length = self.headers.get("Content-Length")
         if raw_length is None:
             return b""
