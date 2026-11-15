@@ -35,7 +35,12 @@ run `/hooks` in codex once after connecting or disconnecting.
 
 Uploads happen at turn boundaries — `SessionStart`, `Stop`, `StopFailure`,
 `PreCompact`, `SessionEnd` — never on tool calls. Alongside the transcript the
-client sends the working directory, the git branch, the hostname and the account.
+client sends the working directory, the git branch, the account, and the machine
+the session ran on: short hostname, FQDN, OS, OS release, architecture and unix
+user. The same agent account is usually logged in on several boxes, so that is
+what tells their sessions apart.
+
+To read sessions back off a server, see the [vboxd API](../server/API.md).
 
 ## Storage layout
 
