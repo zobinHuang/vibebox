@@ -1,6 +1,10 @@
 # macOS Finder metadata
 .DS_Store
 
+# python bytecode
+__pycache__/
+*.pyc
+
 # editor / scratch
 *.tmp
 *.bak
