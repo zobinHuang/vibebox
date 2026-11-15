@@ -27,6 +27,12 @@ vbox kill <name>
 
 # kill the session you're in
 vbox exit
+
+# upload agent session history to a server
+vbox connect <host> <port> --token <token>
+
+# stop uploading
+vbox disconnect
 ```
 
-See [keybindings](docs/keybindings.md).
+See [keybindings](docs/keybindings.md) and [session history](docs/sessions.md).

@@ -21,4 +21,6 @@ vboxd token
 vboxd ls
 ```
 
-Re-running the deploy upgrades in place and keeps the existing token.
+Re-running the deploy upgrades in place and keeps the existing token. See
+[session history](../docs/sessions.md) for the protocol, the storage layout and
+what ends up on disk.
