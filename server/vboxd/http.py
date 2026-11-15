@@ -14,6 +14,8 @@ from vboxd.errors import (
     ValidationError,
     VboxdError,
 )
+from vboxd.playbooks import PlaybookIndex
+from vboxd.skills import SkillIndex
 from vboxd.store import SessionMeta, SessionQuery, SessionStore
 
 
@@ -37,6 +39,14 @@ class VboxdRequestHandler(BaseHTTPRequestHandler):
     def do_PUT(self) -> None:
         """Serve a transcript append."""
         self._dispatch("PUT")
+
+    def do_PATCH(self) -> None:
+        """Serve a change to an indexed skill or playbook."""
+        self._dispatch("PATCH")
+
+    def do_DELETE(self) -> None:
+        """Serve the removal of an indexed skill or playbook."""
+        self._dispatch("DELETE")
 
     def log_message(self, format: str, *args: object) -> None:
         """Write one request line to stderr.
@@ -87,6 +97,28 @@ class VboxdRequestHandler(BaseHTTPRequestHandler):
 
         self._authenticate()
 
+        collection = list_segments[0] if list_segments else ""
+        if collection in ("sessions", "machines", "accounts"):
+            self._route_sessions(method, list_segments, map_query)
+        elif collection == "skills":
+            self._route_skills(method, list_segments, map_query)
+        elif collection == "playbooks":
+            self._route_playbooks(method, list_segments, map_query)
+        else:
+            raise NotFoundError(self._no_such_route(method, list_segments))
+
+    def _no_such_route(self, method: str, list_segments: list[str]) -> str:
+        return (
+            f"no such route: {method} /{self.HANDLER_API_PREFIX}/"
+            + "/".join(list_segments)
+        )
+
+    def _route_sessions(
+        self,
+        method: str,
+        list_segments: list[str],
+        map_query: dict[str, list[str]],
+    ) -> None:
         if list_segments == ["sessions"] and method == "GET":
             self._handle_query(map_query)
             return
@@ -128,8 +160,141 @@ class VboxdRequestHandler(BaseHTTPRequestHandler):
                 self._handle_transcript(session_id, map_query)
                 return
 
-        raise NotFoundError(f"no such route: {method} /{self.HANDLER_API_PREFIX}/"
-                            + "/".join(list_segments))
+        raise NotFoundError(self._no_such_route(method, list_segments))
+
+    def _route_skills(
+        self,
+        method: str,
+        list_segments: list[str],
+        map_query: dict[str, list[str]],
+    ) -> None:
+        skills = self._skills()
+        if list_segments == ["skills"]:
+            if method == "GET":
+                list_record = skills.query(
+                    text=self._query_text(map_query, "q"),
+                    repo=self._query_text(map_query, "repo"),
+                    limit=self._index_limit(map_query, SkillIndex.INDEX_QUERY_DEFAULT_LIMIT),
+                )
+                self._respond_json(
+                    HTTPStatus.OK,
+                    {"skills": [record.as_payload() for record in list_record]},
+                )
+                return
+            if method == "POST":
+                self._respond_json(
+                    HTTPStatus.OK,
+                    skills.register(self._read_json_body()).as_payload(),
+                )
+                return
+
+        if len(list_segments) == 2:
+            skill_id = list_segments[1]
+            if method == "GET":
+                self._respond_json(HTTPStatus.OK, skills.get(skill_id).as_payload())
+                return
+            if method == "PATCH":
+                self._respond_json(
+                    HTTPStatus.OK,
+                    skills.update(skill_id, self._read_json_body()).as_payload(),
+                )
+                return
+            if method == "DELETE":
+                self._read_body()
+                skills.delete(skill_id)
+                self._respond_json(HTTPStatus.OK, {"ok": True})
+                return
+
+        if len(list_segments) == 3 and method in ("GET", "POST"):
+            skill_id = list_segments[1]
+            action = list_segments[2]
+            if action == "versions" and method == "GET":
+                record = skills.get(skill_id)
+                self._respond_json(
+                    HTTPStatus.OK,
+                    {
+                        "skill_id": record.id,
+                        "default_ref": record.default_ref,
+                        "versions": [v.as_payload() for v in record.list_versions],
+                    },
+                )
+                return
+            if action == "refresh" and method == "POST":
+                self._read_body()
+                record, version = skills.resolve_version(skill_id, SkillIndex.INDEX_PIN_LATEST)
+                self._respond_json(
+                    HTTPStatus.OK,
+                    {
+                        "skill_id": record.id,
+                        "default_ref": record.default_ref,
+                        "version": version.as_payload(),
+                    },
+                )
+                return
+
+        raise NotFoundError(self._no_such_route(method, list_segments))
+
+    def _route_playbooks(
+        self,
+        method: str,
+        list_segments: list[str],
+        map_query: dict[str, list[str]],
+    ) -> None:
+        playbooks = self._playbooks()
+        if list_segments == ["playbooks"]:
+            if method == "GET":
+                list_record = playbooks.query(
+                    text=self._query_text(map_query, "q"),
+                    limit=self._index_limit(
+                        map_query,
+                        PlaybookIndex.INDEX_QUERY_DEFAULT_LIMIT,
+                    ),
+                )
+                self._respond_json(
+                    HTTPStatus.OK,
+                    {"playbooks": [record.as_payload() for record in list_record]},
+                )
+                return
+            if method == "POST":
+                self._respond_json(
+                    HTTPStatus.CREATED,
+                    playbooks.create(self._read_json_body()).as_payload(),
+                )
+                return
+
+        if len(list_segments) == 2:
+            playbook_id = list_segments[1]
+            if method == "GET":
+                self._respond_json(HTTPStatus.OK, playbooks.get(playbook_id).as_payload())
+                return
+            if method == "PATCH":
+                self._respond_json(
+                    HTTPStatus.OK,
+                    playbooks.update(playbook_id, self._read_json_body()).as_payload(),
+                )
+                return
+            if method == "DELETE":
+                self._read_body()
+                playbooks.delete(playbook_id)
+                self._respond_json(HTTPStatus.OK, {"ok": True})
+                return
+
+        if len(list_segments) == 3 and list_segments[2] == "resolve" and method == "GET":
+            self._respond_json(
+                HTTPStatus.OK,
+                playbooks.resolve(list_segments[1]).as_payload(),
+            )
+            return
+
+        raise NotFoundError(self._no_such_route(method, list_segments))
+
+    def _index_limit(self, map_query: dict[str, list[str]], default: int) -> int:
+        if "limit" not in map_query:
+            return default
+        limit = self._query_int(map_query, "limit")
+        if limit < 1 or limit > SessionQuery.QUERY_MAX_LIMIT:
+            raise ValidationError(f"limit out of range: {limit}")
+        return limit
 
     def _handle_begin(self, session_id: str) -> None:
         meta = SessionMeta.from_request(
@@ -303,6 +468,12 @@ class VboxdRequestHandler(BaseHTTPRequestHandler):
     def _store(self) -> SessionStore:
         return self.server.store
 
+    def _skills(self) -> SkillIndex:
+        return self.server.skills
+
+    def _playbooks(self) -> PlaybookIndex:
+        return self.server.playbooks
+
     def _respond_json(self, status: HTTPStatus, map_payload: dict[str, object]) -> None:
         body = json.dumps(map_payload).encode("utf-8")
         self.send_response(status)
@@ -322,9 +493,17 @@ class VboxdServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, config: ServerConfig, store: SessionStore) -> None:
+    def __init__(
+        self,
+        config: ServerConfig,
+        store: SessionStore,
+        skills: SkillIndex | None = None,
+        playbooks: PlaybookIndex | None = None,
+    ) -> None:
         self.config = config
         self.store = store
+        self.skills = skills or SkillIndex(config.data_root)
+        self.playbooks = playbooks or PlaybookIndex(config.data_root, self.skills)
         super().__init__(
             (config.host, config.port),
             VboxdRequestHandler,

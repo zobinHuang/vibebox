@@ -93,6 +93,16 @@ if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) e
 fi
 info "python3 $(python3 -VV | head -1 | cut -d' ' -f2)"
 
+# The skill index resolves refs to commits with `git ls-remote`, which is the
+# only way to do it that works for GitHub, GitLab and self-hosted alike without
+# cloning anything. Session upload does not need git, so this is a warning.
+if command -v git >/dev/null 2>&1; then
+  info "git $(git --version | cut -d' ' -f3)"
+else
+  warn "git not found — session upload still works, but the skill index cannot"
+  warn "resolve repository refs until git is installed."
+fi
+
 # ─── 2. install the package ──────────────────────────────────────────
 echo ""
 echo "── install ───────────────────────────────────────"
