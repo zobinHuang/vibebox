@@ -34,6 +34,17 @@ VBOX_PICK_WAIT_SECONDS=30
 VBOX_PICK_NONE='-'
 VBOX_SELF="$HOME/.local/bin/vbox-playbook"
 
+# The log is opened by redirection in several places, and a redirection
+# that cannot be opened makes the command it is attached to fail without
+# running — which on a machine where this directory does not exist yet
+# turned every server request into a bogus "http 0". Settle it once, here,
+# and fall back to discarding rather than failing.
+if mkdir -p "$VBOX_STATE_DIR" 2>/dev/null && : >> "$VBOX_LOG" 2>/dev/null; then
+  :
+else
+  VBOX_LOG=/dev/null
+fi
+
 usage() {
   cat >&2 <<'EOF'
 Usage:
