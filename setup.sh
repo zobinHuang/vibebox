@@ -368,6 +368,11 @@ if _vbox_install_or_fail bin/vbox-session "$HOME/.local/bin/vbox-session" "vbox-
   info "Installed vbox-session"
 fi
 
+if _vbox_install_or_fail bin/vbox-playbook "$HOME/.local/bin/vbox-playbook" "vbox-playbook"; then
+  chmod +x "$HOME/.local/bin/vbox-playbook"
+  info "Installed vbox-playbook"
+fi
+
 # ─── 4. install vbox command ─────────────────────────────────────
 echo ""
 echo "── vbox command ──────────────────────────────"
