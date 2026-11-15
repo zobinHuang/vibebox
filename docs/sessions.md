@@ -66,7 +66,8 @@ the session ran on: short hostname, FQDN, OS, OS release, architecture and unix
 user. The same agent account is usually logged in on several boxes, so that is
 what tells their sessions apart.
 
-To read sessions back off a server, see the [vboxd API](../server/API.md).
+To read sessions back off a server, see the [vboxd API](../server/API.md). The
+same server also indexes [playbooks](playbooks.md).
 
 ## Storage layout
 

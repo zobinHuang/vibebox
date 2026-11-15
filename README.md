@@ -35,4 +35,5 @@ vbox connect <host> <port> --token <token>
 vbox disconnect
 ```
 
-See [keybindings](docs/keybindings.md) and [session history](docs/sessions.md).
+See [keybindings](docs/keybindings.md), [session history](docs/sessions.md) and
+[playbooks](docs/playbooks.md).
