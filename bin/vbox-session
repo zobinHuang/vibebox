@@ -191,6 +191,21 @@ account_json() {
     "$(json_field label "$_acct_label")"
 }
 
+# ─── the machine this session ran on ──────────────────────────────────
+# Recorded so that a session can be traced back to the box it happened on
+# — the same agent account is usually logged in on several of them.
+machine_json() {
+  _mc_host="$(hostname 2>/dev/null)"
+  _mc_fqdn="$(hostname -f 2>/dev/null)" || _mc_fqdn=""
+  printf '{%s,%s,%s,%s,%s,%s}' \
+    "$(json_field hostname "${_mc_host%%.*}")" \
+    "$(json_field fqdn "${_mc_fqdn:-$_mc_host}")" \
+    "$(json_field os "$(uname -s 2>/dev/null)")" \
+    "$(json_field os_release "$(uname -r 2>/dev/null)")" \
+    "$(json_field arch "$(uname -m 2>/dev/null)")" \
+    "$(json_field user "$(id -un 2>/dev/null)")"
+}
+
 find_transcript() {
   # find_transcript <agent> <session-id> — for payloads that carry no path
   case "$1" in
@@ -238,13 +253,13 @@ upload_session() {
   [ -f "$_up_file" ] || { log "no transcript for $_up_id"; return 1; }
 
   _up_branch="$(git -C "$_up_cwd" rev-parse --abbrev-ref HEAD 2>/dev/null)" || _up_branch=""
-  printf '{"agent":"%s",%s,%s,%s,%s,"account":%s}' \
+  printf '{"agent":"%s",%s,%s,%s,"account":%s,"machine":%s}' \
     "$_up_agent" \
     "$(json_field cwd "$_up_cwd")" \
-    "$(json_field host "$(hostname 2>/dev/null)")" \
     "$(json_field git_branch "$_up_branch")" \
     "$(json_field transcript_path "$_up_file")" \
     "$(account_json "$_up_agent" "$_up_file")" \
+    "$(machine_json)" \
     > "$VBOX_WORK/begin.json"
 
   if ! api POST "/v1/sessions/$_up_id/begin" "$VBOX_WORK/begin.json"; then

@@ -4,7 +4,7 @@ import json
 import os
 import re
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
@@ -58,6 +58,47 @@ class AgentAccount:
 
 
 @dataclass
+class MachineInfo:
+    """The machine a session was recorded on."""
+
+    hostname: str | None = None
+    fqdn: str | None = None
+    os: str | None = None
+    os_release: str | None = None
+    arch: str | None = None
+    user: str | None = None
+
+    MACHINE_FIELDS = ("hostname", "fqdn", "os", "os_release", "arch", "user")
+
+    @classmethod
+    def from_mapping(cls, map_raw: object) -> "MachineInfo":
+        """Read a machine block out of a request body or a stored meta.json.
+
+        Args:
+            map_raw: the decoded machine mapping, or anything else when absent
+
+        Returns:
+            the machine as reported, with every unknown field left as None
+        """
+        if not isinstance(map_raw, dict):
+            return cls()
+        map_clean: dict[str, str | None] = {}
+        for name in cls.MACHINE_FIELDS:
+            value = map_raw.get(name)
+            text = str(value).strip() if value is not None else ""
+            map_clean[name] = text or None
+        return cls(**map_clean)
+
+    def as_payload(self) -> dict[str, object]:
+        """Render the machine as the JSON stored beside the transcript.
+
+        Returns:
+            a mapping of every machine field
+        """
+        return {name: getattr(self, name) for name in self.MACHINE_FIELDS}
+
+
+@dataclass
 class SessionMeta:
     """Everything known about one stored agent session."""
 
@@ -65,7 +106,7 @@ class SessionMeta:
     session_id: str
     account: AgentAccount
     cwd: str | None = None
-    host: str | None = None
+    machine: MachineInfo = field(default_factory=MachineInfo)
     git_branch: str | None = None
     cli_version: str | None = None
     transcript_path: str | None = None
@@ -87,7 +128,7 @@ class SessionMeta:
         Returns:
             the current time as an ISO 8601 string in UTC
         """
-        return datetime.now(timezone.utc).isoformat(timespec="seconds")
+        return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
     @classmethod
     def validate_session_id(cls, session_id: str) -> str:
@@ -134,7 +175,7 @@ class SessionMeta:
             session_id=session_id,
             account=AgentAccount.from_request(map_body),
             cwd=cls._optional_text(map_body.get("cwd")),
-            host=cls._optional_text(map_body.get("host")),
+            machine=MachineInfo.from_mapping(map_body.get("machine")),
             git_branch=cls._optional_text(map_body.get("git_branch")),
             cli_version=cls._optional_text(map_body.get("cli_version")),
             transcript_path=cls._optional_text(map_body.get("transcript_path")),
@@ -195,7 +236,7 @@ class SessionMeta:
                 "label": self.account.label,
             },
             "cwd": self.cwd,
-            "host": self.host,
+            "machine": self.machine.as_payload(),
             "git_branch": self.git_branch,
             "cli_version": self.cli_version,
             "transcript_path": self.transcript_path,
@@ -226,7 +267,7 @@ class SessionMeta:
                 label=cls._optional_text(map_account.get("label")),
             ),
             cwd=cls._optional_text(map_payload.get("cwd")),
-            host=cls._optional_text(map_payload.get("host")),
+            machine=MachineInfo.from_mapping(map_payload.get("machine")),
             git_branch=cls._optional_text(map_payload.get("git_branch")),
             cli_version=cls._optional_text(map_payload.get("cli_version")),
             transcript_path=cls._optional_text(map_payload.get("transcript_path")),

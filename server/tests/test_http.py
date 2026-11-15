@@ -14,7 +14,7 @@ class HttpApiTest(unittest.TestCase):
     TEST_BEGIN_BODY = {
         "agent": "claude",
         "cwd": "/home/dev/proj",
-        "host": "laptop",
+        "machine": {"hostname": "laptop", "os": "Linux"},
         "account": {"uuid": "acct-1", "email": "dev@example.com"},
     }
 
@@ -182,6 +182,42 @@ class HttpApiTest(unittest.TestCase):
         status, map_body = self.request("POST", "/v1/sessions/s-1/close", b"{}")
         self.assertEqual(status, 200)
         self.assertIsNotNone(map_body["closed_at"])
+
+    def test_machine_is_recorded_with_the_session(self) -> None:
+        status, _ = self.request(
+            "POST",
+            "/v1/sessions/s-1/begin",
+            json.dumps(
+                {
+                    "agent": "claude",
+                    "cwd": "/srv/x",
+                    "account": {"uuid": "acct-1"},
+                    "machine": {
+                        "hostname": "buildbox",
+                        "fqdn": "buildbox.lan",
+                        "os": "Linux",
+                        "os_release": "6.8.0",
+                        "arch": "x86_64",
+                        "user": "dev",
+                    },
+                }
+            ).encode("utf-8"),
+        )
+        self.assertEqual(status, 200)
+        map_meta = json.loads(next(self.root.rglob("meta.json")).read_text())
+        self.assertEqual(map_meta["machine"]["hostname"], "buildbox")
+        self.assertEqual(map_meta["machine"]["arch"], "x86_64")
+        self.assertEqual(map_meta["machine"]["user"], "dev")
+
+    def test_a_session_without_machine_info_is_still_stored(self) -> None:
+        status, _ = self.request(
+            "POST",
+            "/v1/sessions/s-1/begin",
+            json.dumps({"agent": "claude", "cwd": "/srv/x"}).encode("utf-8"),
+        )
+        self.assertEqual(status, 200)
+        map_meta = json.loads(next(self.root.rglob("meta.json")).read_text())
+        self.assertIsNone(map_meta["machine"]["hostname"])
 
     def test_listing_reports_the_stored_sessions(self) -> None:
         self.begin("s-1")
