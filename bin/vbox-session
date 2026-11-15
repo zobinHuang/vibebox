@@ -31,6 +31,8 @@ VBOX_FLUSH_MAX=20
 VBOX_LOG_MAX_LINES=2000
 VBOX_HTTP_TIMEOUT=60
 VBOX_LOCK_STALE_MINUTES=10
+VBOX_ADOPT_WINDOW_MINUTES=240
+VBOX_ADOPT_MAX=50
 
 usage() {
   cat >&2 <<'EOF'
@@ -39,6 +41,7 @@ Usage:
   vbox-session disconnect
   vbox-session status
   vbox-session flush
+  vbox-session adopt [--all | --since-minutes <n>]
   vbox-session upload <claude|codex>     hook entry point; payload on stdin
 EOF
   exit 1
@@ -107,6 +110,10 @@ json_bool() {
     false|False|0) printf '0' ;;
     *)             printf '%s' "$2" ;;
   esac
+}
+
+file_mtime() {
+  stat -f '%m' "$1" 2>/dev/null || stat -c '%Y' "$1" 2>/dev/null
 }
 
 file_size() {
@@ -217,6 +224,118 @@ find_transcript() {
         head -1
       ;;
   esac
+}
+
+# ─── adopt sessions that are already under way ────────────────────────
+# Installing vibebox, or connecting it to a server, in a box where agents
+# are already running leaves those sessions with nothing on the server
+# and no reason to push: their next turn would upload them, but only once
+# you type again, and codex will not fire a hook at all until its new
+# config is trusted. Adopting walks the transcripts the agents have been
+# writing and pushes them straight away.
+#
+# Liveness is judged by how recently a transcript was written, because
+# neither agent offers anything better: there is no reliable way to map a
+# running process back to its session id. A session idle since this
+# morning is still a session you have open, hence a window of hours
+# rather than minutes. A session that just ended is picked up too, which
+# is the behaviour you want anyway.
+adopt_scan() {
+  # adopt_scan <agent> — newest transcripts first, one path per line
+  case "$1" in
+    claude)
+      _as_root="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects"
+      _as_name='*.jsonl'
+      ;;
+    codex)
+      _as_root="${CODEX_HOME:-$HOME/.codex}/sessions"
+      _as_name='rollout-*.jsonl'
+      ;;
+    *) return 0 ;;
+  esac
+  [ -d "$_as_root" ] || return 0
+  if [ "$VBOX_ADOPT_WINDOW" = all ]; then
+    find "$_as_root" -type f -name "$_as_name" 2>/dev/null
+  else
+    find "$_as_root" -type f -name "$_as_name" -mmin "-$VBOX_ADOPT_WINDOW" 2>/dev/null
+  fi > "$VBOX_WORK/adopt-paths"
+  while IFS= read -r _as_path; do
+    [ -n "$_as_path" ] || continue
+    printf '%s\t%s\n' "$(file_mtime "$_as_path")" "$_as_path"
+  done < "$VBOX_WORK/adopt-paths" |
+    sort -rn |
+    head -n "$VBOX_ADOPT_MAX" |
+    cut -f2-
+}
+
+adopt_session_id() {
+  # adopt_session_id <agent> <transcript>
+  _ai_base="$(basename "$2" .jsonl)"
+  case "$1" in
+    claude) printf '%s' "$_ai_base" ;;
+    codex)
+      printf '%s' "$_ai_base" |
+        sed -n 's/^rollout-.*-\([0-9a-fA-F]\{8\}-[0-9a-fA-F]\{4\}-[0-9a-fA-F]\{4\}-[0-9a-fA-F]\{4\}-[0-9a-fA-F]\{12\}\)$/\1/p'
+      ;;
+  esac
+}
+
+transcript_cwd() {
+  # transcript_cwd <transcript> — both agents write it into their own lines
+  head -n 50 "$1" 2>/dev/null |
+    grep -m1 -o '"cwd":"[^"]*"' |
+    sed -e 's/^"cwd":"//' -e 's/"$//'
+}
+
+ledger_size_of() {
+  # ledger_size_of <session-id>
+  [ -f "$VBOX_LEDGER" ] || return 0
+  awk -F'\t' -v id="$1" '$2 == id { print $4; exit }' "$VBOX_LEDGER"
+}
+
+adopt_backlog() {
+  VBOX_ADOPT_UPLOADED=0
+  for _ab_agent in claude codex; do
+    adopt_scan "$_ab_agent" > "$VBOX_WORK/adopt-$_ab_agent"
+    while IFS= read -r _ab_file; do
+      [ -n "$_ab_file" ] && [ -f "$_ab_file" ] || continue
+      _ab_id="$(adopt_session_id "$_ab_agent" "$_ab_file")"
+      [ -n "$_ab_id" ] || continue
+      # Already up to date as far as we know; the hooks have it from here.
+      [ "$(ledger_size_of "$_ab_id")" = "$(file_size "$_ab_file")" ] && continue
+      with_session_lock "$_ab_id" || continue
+      if upload_session "$_ab_agent" "$_ab_id" "$_ab_file" \
+           "$(transcript_cwd "$_ab_file")" ""; then
+        VBOX_ADOPT_UPLOADED=$((VBOX_ADOPT_UPLOADED + 1))
+      fi
+      release_session_lock "$_ab_id"
+    done < "$VBOX_WORK/adopt-$_ab_agent"
+  done
+  log "adopted $VBOX_ADOPT_UPLOADED session(s)"
+}
+
+cmd_adopt() {
+  VBOX_ADOPT_WINDOW="$VBOX_ADOPT_WINDOW_MINUTES"
+  _ad_quiet=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --all)           VBOX_ADOPT_WINDOW=all; shift ;;
+      --since-minutes) VBOX_ADOPT_WINDOW="${2:-}"; shift 2 ;;
+      --quiet)         _ad_quiet=1; shift ;;
+      *) printf 'vbox-session: unknown flag %s\n' "$1" >&2; usage ;;
+    esac
+  done
+  case "$VBOX_ADOPT_WINDOW" in
+    all) ;;
+    ''|*[!0-9]*) printf 'vbox-session: --since-minutes takes a number\n' >&2; exit 1 ;;
+  esac
+  open_work_dir || exit 0
+  # Not connected: there is nothing to upload to, and nothing to say.
+  load_connection || exit 0
+  adopt_backlog
+  trim_log
+  [ "$_ad_quiet" -eq 1 ] || printf 'Pushed %s session(s).\n' "$VBOX_ADOPT_UPLOADED"
+  exit 0
 }
 
 # ─── the ledger of what might still be behind ─────────────────────────
@@ -397,8 +516,15 @@ cmd_connect() {
   printf 'Connected to %s\n' "$_base"
   "$HOME/.local/bin/vbox-hooks" install >/dev/null 2>&1 ||
     printf 'vbox-session: could not install the upload hooks\n' >&2
-  printf 'Session history will upload from the next agent turn.\n'
   vbox_warn_codex_trust
+  # Sessions already under way have nothing on the server and no reason to
+  # push until you next type, so push them now.
+  VBOX_ADOPT_WINDOW="$VBOX_ADOPT_WINDOW_MINUTES"
+  open_work_dir || exit 0
+  load_connection || exit 0
+  adopt_backlog
+  printf 'Pushed %s session(s) already under way; the rest follow each turn.\n' \
+    "$VBOX_ADOPT_UPLOADED"
   exit 0
 }
 
@@ -538,6 +664,7 @@ case "$CMD" in
   status)      cmd_status ;;
   upload)      cmd_upload "$@" ;;
   run-upload)  cmd_run_upload "$@" ;;
+  adopt)       cmd_adopt "$@" ;;
   flush)       cmd_flush ;;
   -h|--help)   usage ;;
   *)           usage ;;

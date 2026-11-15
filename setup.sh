@@ -455,6 +455,16 @@ else
   info "No running tmux session to reload"
 fi
 
+# Agents that were already running when this ran have just been given the
+# upload hooks, but nothing would push them until their next turn — and
+# codex will not fire a hook at all until its new config is trusted. Push
+# what is already under way instead of waiting. Nothing happens here if
+# this machine was never connected to a session server.
+if [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/vibebox/connect.json" ]; then
+  nohup "$HOME/.local/bin/vbox-session" adopt --quiet >/dev/null 2>&1 &
+  info "Pushing agent sessions already under way to the session server"
+fi
+
 # ─── done ─────────────────────────────────────────────────────────────
 echo ""
 echo "══════════════════════════════════════════════════"
