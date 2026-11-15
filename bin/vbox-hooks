@@ -1,0 +1,200 @@
+#!/bin/sh
+# [vibebox] vbox-hooks — own the code-agent hook entries vibebox installs
+# into Claude Code and codex.
+#
+#   vbox-hooks install    merge vibebox's hooks into both agents' config
+#   vbox-hooks remove     strip vibebox's hooks back out
+#
+# One line per agent is printed to stdout so a caller can report what
+# happened: "<agent>: merged", "<agent>: absent", "<agent>: failed".
+#
+# Every vibebox hook invokes $HOME/.local/bin/vbox-<something>, and the
+# merge strips every entry matching that marker before re-adding the
+# current set. That keeps re-runs idempotent and cleans up hooks left
+# behind by older installs (the long-dead vbox-music ones among them).
+
+set -u
+
+VBOX_OWNED_MARKER='vbox-(agent|music)'
+CLAUDE_SETTINGS="$HOME/.claude/settings.json"
+CODEX_HOOKS="${CODEX_HOME:-$HOME/.codex}/hooks.json"
+
+usage() {
+  cat >&2 <<'EOF'
+Usage:
+  vbox-hooks install    merge vibebox's code-agent hooks into place
+  vbox-hooks remove     strip vibebox's code-agent hooks back out
+EOF
+  exit 1
+}
+
+# ─── Claude Code ──────────────────────────────────────────────────────
+# Event choices worth recording:
+#   * UserPromptSubmit is the primary busy signal. PreToolUse alone
+#     leaves a gap between submitting a prompt and the first tool call,
+#     during which the tab would still read as idle.
+#   * PostToolUse restores busy after you approve a permission prompt,
+#     which is what clears the `wait` state.
+#   * Notification's matcher matches the notification *type*, so it is
+#     scoped to the ones that actually block on you. Plain idle_prompt is
+#     deliberately excluded — it fires just because you stepped away, and
+#     would eventually paint every idle tab yellow.
+#   * StopFailure matters: a turn killed by an API error never fires
+#     Stop, so without it a rate-limited tab sits in BUSY forever.
+#   * SubagentStop is deliberately absent — a subagent finishing does not
+#     mean the main agent stopped working.
+#   * The two tool hooks are async so they add no latency to every single
+#     tool call — measured at ~18ms each otherwise, and they fire twice
+#     per call. The turn-boundary hooks stay synchronous, where ordering
+#     against each other is what actually matters.
+#
+# Quoted heredoc on purpose: $HOME and $TMUX_PANE must survive into the
+# settings file and be expanded by the hook's own shell at fire time.
+vbox_claude_hooks() {
+  cat <<'JSON'
+{
+  "SessionStart":     [ { "hooks": [ { "type": "command", "command": "$HOME/.local/bin/vbox-agent set \"$TMUX_PANE\" idle" } ] } ],
+  "UserPromptSubmit": [ { "hooks": [ { "type": "command", "command": "$HOME/.local/bin/vbox-agent set \"$TMUX_PANE\" busy" } ] } ],
+  "PreToolUse":       [ { "hooks": [ { "type": "command", "command": "$HOME/.local/bin/vbox-agent set \"$TMUX_PANE\" busy", "async": true } ] } ],
+  "PostToolUse":      [ { "hooks": [ { "type": "command", "command": "$HOME/.local/bin/vbox-agent set \"$TMUX_PANE\" busy", "async": true } ] } ],
+  "Notification":     [ { "matcher": "permission_prompt|elicitation_dialog",
+                          "hooks": [ { "type": "command", "command": "$HOME/.local/bin/vbox-agent set \"$TMUX_PANE\" wait" } ] } ],
+  "Stop":             [ { "hooks": [ { "type": "command", "command": "$HOME/.local/bin/vbox-agent set \"$TMUX_PANE\" idle" } ] } ],
+  "StopFailure":      [ { "hooks": [ { "type": "command", "command": "$HOME/.local/bin/vbox-agent set \"$TMUX_PANE\" idle" } ] } ],
+  "SessionEnd":       [ { "hooks": [ { "type": "command", "command": "$HOME/.local/bin/vbox-agent set \"$TMUX_PANE\" none" } ] } ]
+}
+JSON
+}
+
+# ─── codex ────────────────────────────────────────────────────────────
+# codex has its own hook engine and its hooks.json uses the same shape as
+# Claude's "hooks" key, so the same merge works on both files. The event
+# set differs though:
+#   * PermissionRequest replaces Claude's Notification as the "blocked on
+#     you" signal — it is the event codex fires when a tool call needs a
+#     decision, which is exactly what `wait` means.
+#   * No StopFailure — codex has no such event, so a turn killed by an API
+#     error is caught by the SessionEnd / pane-exit paths instead.
+#   * No "async": codex 0.132 prints `skipping async hook ... async hooks
+#     are not supported yet` and drops the hook entirely, so the tool
+#     hooks here are synchronous even though the Claude ones aren't.
+vbox_codex_hooks() {
+  cat <<'JSON'
+{
+  "SessionStart":      [ { "hooks": [ { "type": "command", "command": "$HOME/.local/bin/vbox-agent set \"$TMUX_PANE\" idle" } ] } ],
+  "UserPromptSubmit":  [ { "hooks": [ { "type": "command", "command": "$HOME/.local/bin/vbox-agent set \"$TMUX_PANE\" busy" } ] } ],
+  "PreToolUse":        [ { "hooks": [ { "type": "command", "command": "$HOME/.local/bin/vbox-agent set \"$TMUX_PANE\" busy" } ] } ],
+  "PostToolUse":       [ { "hooks": [ { "type": "command", "command": "$HOME/.local/bin/vbox-agent set \"$TMUX_PANE\" busy" } ] } ],
+  "PermissionRequest": [ { "hooks": [ { "type": "command", "command": "$HOME/.local/bin/vbox-agent set \"$TMUX_PANE\" wait" } ] } ],
+  "Stop":              [ { "hooks": [ { "type": "command", "command": "$HOME/.local/bin/vbox-agent set \"$TMUX_PANE\" idle" } ] } ],
+  "SessionEnd":        [ { "hooks": [ { "type": "command", "command": "$HOME/.local/bin/vbox-agent set \"$TMUX_PANE\" none" } ] } ]
+}
+JSON
+}
+
+# ─── merge ────────────────────────────────────────────────────────────
+# No backup copy is kept. The merge is already all-or-nothing: it is
+# built in a temp file and only swapped in once it has been produced
+# cleanly and is non-empty, so a failed or malformed merge leaves the
+# original in place untouched rather than needing to be restored.
+vbox_merge_hooks() {
+  # vbox_merge_hooks <file> <json-to-add>
+  _file="$1"
+  _add="$2"
+  mkdir -p "$(dirname "$_file")" || return 3
+  [ -f "$_file" ] || printf '{}\n' > "$_file"
+  _tmp="$(mktemp)" || return 3
+
+  if command -v jq >/dev/null 2>&1; then
+    jq --arg marker "$VBOX_OWNED_MARKER" --argjson add "$_add" '
+      def strip:
+        with_entries(
+          .value |= ( map(.hooks |= map(select((.command // "") | test($marker) | not)))
+                    | map(select((.hooks | length) > 0)) )
+        )
+        | with_entries(select((.value | length) > 0));
+      .hooks = ((.hooks // {}) | strip)
+      | reduce ($add | to_entries)[] as $e (.; .hooks[$e.key] = ((.hooks[$e.key] // []) + $e.value))
+    ' "$_file" > "$_tmp" 2>/dev/null
+    _rc=$?
+  elif command -v python3 >/dev/null 2>&1; then
+    VBOX_OWNED_MARKER="$VBOX_OWNED_MARKER" python3 - "$_file" "$_add" "$_tmp" <<'PY'
+import json, os, re, sys
+src, add, dest = sys.argv[1], json.loads(sys.argv[2]), sys.argv[3]
+with open(src) as f:
+    doc = json.load(f)
+owned = re.compile(os.environ["VBOX_OWNED_MARKER"])
+kept = {}
+for event, groups in (doc.get("hooks") or {}).items():
+    survivors = []
+    for group in groups:
+        handlers = [h for h in group.get("hooks", []) if not owned.search(h.get("command", ""))]
+        if handlers:
+            group = dict(group, hooks=handlers)
+            survivors.append(group)
+    if survivors:
+        kept[event] = survivors
+for event, groups in add.items():
+    kept[event] = kept.get(event, []) + groups
+doc["hooks"] = kept
+with open(dest, "w") as f:
+    json.dump(doc, f, indent=2)
+    f.write("\n")
+PY
+    _rc=$?
+  else
+    rm -f "$_tmp"
+    return 2
+  fi
+
+  if [ "$_rc" -ne 0 ] || [ ! -s "$_tmp" ]; then
+    rm -f "$_tmp"
+    return 1
+  fi
+  # mktemp is 0600; settings.json holds credentials-adjacent config, so
+  # keep it that way rather than inheriting the umask.
+  chmod 600 "$_tmp" 2>/dev/null || true
+  mv "$_tmp" "$_file"
+  return 0
+}
+
+vbox_apply() {
+  # vbox_apply <label> <file> <json-to-add>
+  _label="$1"
+  if vbox_merge_hooks "$2" "$3"; then
+    printf '%s: merged\n' "$_label"
+  else
+    case $? in
+      2) printf '%s: no-json-tool\n' "$_label" ;;
+      *) printf '%s: failed\n' "$_label" ;;
+    esac
+  fi
+}
+
+cmd_install() {
+  vbox_apply claude "$CLAUDE_SETTINGS" "$(vbox_claude_hooks)"
+  # Only wire up codex if it is actually installed, rather than creating
+  # config for a tool that isn't there.
+  if command -v codex >/dev/null 2>&1; then
+    vbox_apply codex "$CODEX_HOOKS" "$(vbox_codex_hooks)"
+  else
+    printf 'codex: absent\n'
+  fi
+}
+
+cmd_remove() {
+  vbox_apply claude "$CLAUDE_SETTINGS" '{}'
+  if [ -f "$CODEX_HOOKS" ]; then
+    vbox_apply codex "$CODEX_HOOKS" '{}'
+  else
+    printf 'codex: absent\n'
+  fi
+}
+
+[ $# -ge 1 ] || usage
+case "$1" in
+  install)    cmd_install ;;
+  remove)     cmd_remove ;;
+  -h|--help)  usage ;;
+  *)          usage ;;
+esac
