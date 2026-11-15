@@ -140,6 +140,13 @@ bind -T tab_mode x kill-window
 # Clear a tab stuck showing an agent state — an agent SIGKILLed with its
 # pane left open never runs SessionEnd, and no tmux hook fires either.
 bind -T tab_mode c run-shell -b "$HOME/.local/bin/vbox-agent clear #{window_id}"
+# Swap this pane's playbook while an agent is running in it. The agent is
+# told on its next turn, by the UserPromptSubmit hook. display-popup needs
+# tmux 3.2, and a client attached to draw on — which is the case whenever
+# you are there to press the key.
+if-shell "tmux -V | awk '{if($2+0 >= 3.2) exit 0; else exit 1}'" \
+  "bind -T tab_mode p display-popup -w 76 -h 18 -E \"$HOME/.local/bin/vbox-playbook pick --pane '#{pane_id}' --project '#{pane_current_path}'\"" \
+  "bind -T tab_mode p display-message 'playbooks need tmux 3.2 or newer'"
 bind -T tab_mode Left previous-window
 bind -T tab_mode Right next-window
 bind -T tab_mode h previous-window
@@ -489,7 +496,8 @@ echo "    n   new tab              d   split down"
 echo "    r   rename tab           n   split right"
 echo "    ←/→ switch tab           ←/→/↑/↓ navigate"
 echo "    x   close tab            x   close pane"
-echo "                             z   toggle fullscreen"
+echo "    c   clear stuck tab      z   toggle fullscreen"
+echo "    p   pick playbook"
 echo ""
 echo "  Resize (Ctrl+n):  h/j/k/l or arrows (repeatable)"
 echo ""
